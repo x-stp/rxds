@@ -34,6 +34,8 @@ func Client(conn net.Conn, config *Config) *Conn {
 		config:   config,
 		isClient: true,
 	}
+	c.rawInput.Grow(16896)
+	c.hand.Grow(16384)
 	c.handshakeFn = c.clientHandshake
 	return c
 }

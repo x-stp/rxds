@@ -210,6 +210,7 @@ func (c *Conn) clientHandshake() (err error) {
 	} else if raw, h, params, err := c.config.patchHello(); err == nil {
 		hello = h
 		hello.raw = raw
+		c.helloBuf = raw
 		ecdheParams = params
 	} else {
 		var err error

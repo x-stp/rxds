@@ -7,9 +7,12 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"sync"
 )
 
 var errNoTemplate = errors.New("tls: hello template not available")
+
+var helloBufPool sync.Pool
 
 // WarmHelloTemplate pre-builds the ClientHello template so clones of this
 // Config inherit the cached wire bytes. Safe to call concurrently.
@@ -96,7 +99,12 @@ func (c *Config) patchHello() ([]byte, *clientHelloMsg, ecdheParameters, error) 
 	tmpl := tc.template
 	off := tc.offsets
 
-	raw := make([]byte, len(tmpl))
+	var raw []byte
+	if v, ok := helloBufPool.Get().([]byte); ok && cap(v) >= len(tmpl) {
+		raw = v[:len(tmpl)]
+	} else {
+		raw = make([]byte, len(tmpl))
+	}
 	copy(raw, tmpl)
 
 	r := c.rand()

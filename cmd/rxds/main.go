@@ -128,7 +128,7 @@ func main() {
 			defer wg.Done()
 			for t := range targets {
 				attempts.Add(1)
-				res := scanOne(ctx, t, cfg, *timeout, *enableJARM)
+				res := scanOne(ctx, t, cfg, *timeout, uint16(*port), *enableJARM)
 				if shouldEmit(res, *printErrors, *printEmpty) {
 					success.Add(1)
 					select {

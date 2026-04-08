@@ -69,6 +69,7 @@ type Conn struct {
 	buffering bool
 	sendBuf   []byte
 
+	helloBuf    []byte
 	bytesSent   int64
 	packetsSent int64
 
@@ -1102,6 +1103,12 @@ func (c *Conn) Close() error {
 			break
 		}
 	}
+
+	if c.helloBuf != nil {
+		helloBufPool.Put(c.helloBuf)
+		c.helloBuf = nil
+	}
+
 	if x != 0 {
 		return c.conn.Close()
 	}

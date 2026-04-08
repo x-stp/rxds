@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"net"
 	"net/netip"
+	"strconv"
 	"time"
 
 	"github.com/x-stp/rxds"
@@ -37,7 +38,9 @@ type result struct {
 	Err               string   `json:"err,omitempty"`
 }
 
-func scanOne(ctx context.Context, t target, baseCfg *tls.Config, timeout time.Duration, doJARM bool) result {
+var emptyStrings = []string{}
+
+func scanOne(ctx context.Context, t target, baseCfg *tls.Config, timeout time.Duration, defaultPort uint16, doJARM bool) result {
 	ipStr := t.IP.String()
 	r := result{
 		IP:   ipStr,
@@ -48,7 +51,12 @@ func scanOne(ctx context.Context, t target, baseCfg *tls.Config, timeout time.Du
 	dialCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	addr := net.JoinHostPort(ipStr, u16toa(t.Port))
+	var addr string
+	if t.Port == defaultPort {
+		addr = net.JoinHostPort(ipStr, strconv.FormatUint(uint64(defaultPort), 10))
+	} else {
+		addr = net.JoinHostPort(ipStr, strconv.FormatUint(uint64(t.Port), 10))
+	}
 	certs, err := rxds.DialForCert(dialCtx, "tcp", addr, baseCfg)
 	if err != nil {
 		r.Err = err.Error()
@@ -64,13 +72,13 @@ func scanOne(ctx context.Context, t target, baseCfg *tls.Config, timeout time.Du
 	r.CN = n.CN
 	r.SANs = n.SANs
 	if r.SANs == nil {
-		r.SANs = []string{}
+		r.SANs = emptyStrings
 	}
 	r.Org = n.Org
 	r.ApexDomain = n.ApexDomain
 	r.RootDomains = n.RootDomains
 	if r.RootDomains == nil {
-		r.RootDomains = []string{}
+		r.RootDomains = emptyStrings
 	}
 	r.FuzzyHash = n.FuzzyHash
 	sum := sha256.Sum256(leaf.Raw)
@@ -97,19 +105,4 @@ func shouldEmit(r result, printErrors, printEmpty bool) bool {
 		return true
 	}
 	return r.CN != "" || len(r.SANs) > 0
-}
-
-func u16toa(p uint16) string {
-	var b [5]byte
-	n := int(p)
-	i := len(b)
-	for n > 0 {
-		i--
-		b[i] = byte('0' + n%10)
-		n /= 10
-	}
-	if i == len(b) {
-		return "0"
-	}
-	return string(b[i:])
 }
