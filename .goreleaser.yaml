@@ -1,0 +1,109 @@
+version: 2
+
+project_name: rxds
+
+before:
+  hooks:
+    - go mod download
+    - go mod verify
+
+builds:
+  - main: ./cmd/rxds
+    binary: rxds
+    id: rxds
+    env:
+      - CGO_ENABLED=0
+    goos: [windows, linux, darwin, freebsd]
+    goarch: [amd64, arm64]
+    ignore:
+      - goos: windows
+        goarch: arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.ShortCommit}}
+      - -X main.date={{.Date}}
+
+archives:
+  - id: rxds
+    ids: [rxds]
+    name_template: '{{ .ProjectName }}_{{ .Version }}_{{ if eq .Os "darwin" }}macOS{{ else }}{{ .Os }}{{ end }}_{{ .Arch }}'
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: '{{ .ProjectName }}_{{ .Version }}_checksums.txt'
+  algorithm: sha256
+
+snapshot:
+  version_template: '{{ incpatch .Version }}-dev'
+
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+      - typo
+      - Merge pull request
+      - Merge branch
+  groups:
+    - title: 'fixed'
+      regexp: '^.*?fix(\([[:word:]]+\))??!?:.+$'
+      order: 0
+    - title: 'new'
+      regexp: '^.*?feat(\([[:word:]]+\))??!?:.+$'
+      order: 1
+    - title: 'performance'
+      regexp: '^.*?perf(\([[:word:]]+\))??!?:.+$'
+      order: 2
+    - title: other
+      order: 999
+
+release:
+  github:
+    owner: x-stp
+    name: rxds
+  prerelease: auto
+  draft: false
+  name_template: '{{ .Tag }}'
+  header: |
+    ## rx/dialstreamer {{ .Tag }}
+    
+    dial. stream. harvest.
+  footer: |
+    ## install
+    
+    ```bash
+    go install github.com/x-stp/rxds/cmd/rxds@{{ .Tag }}
+    ```
+    
+    Or download the binary for your platform from the assets below.
+    
+    **docs**: https://github.com/x-stp/rxds#readme
+
+nfpms:
+  - id: rxds
+    package_name: rxds
+    formats:
+      - deb
+      - rpm
+      - apk
+    vendor: 'x-stp'
+    homepage: 'https://github.com/x-stp/rxds'
+    maintainer: 'x-stp <hello@vanderstap.info>'
+    description: 'rx/dialstreamer — streaming TLS certificate harvester'
+    license: 'MPL-2.0'
+    contents:
+      - src: ./LICENSE
+        dst: /usr/share/doc/rxds/LICENSE
+      - src: ./README.md
+        dst: /usr/share/doc/rxds/README.md
