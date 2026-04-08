@@ -30,6 +30,7 @@ scripts/
 
 # local-only docs
 CHANGELOG.md
+notes/
 
 # temporary
 *.tmp
