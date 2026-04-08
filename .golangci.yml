@@ -1,0 +1,68 @@
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  enable:
+    - gosec
+    - staticcheck
+    - bodyclose
+    - errcheck
+    - ineffassign
+    - revive
+    - govet
+    - gofmt
+    - goimports
+    - misspell
+    - unconvert
+    - prealloc
+    - gocritic
+    - gosimple
+  disable:
+    - gomnd
+    - wsl
+    - nlreturn
+    - gochecknoinits
+    - gochecknoglobals
+
+linters-settings:
+  gosec:
+    severity: "high"
+    confidence: "medium"
+    excludes:
+      - G104
+      - G304
+  errcheck:
+    check-type-assertions: true
+    check-blank: true
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - performance
+    disabled-checks:
+      - dupImport
+      - ifElseChain
+      - whyNoLint
+  prealloc:
+    simple: true
+    range-loops: true
+    for-loops: true
+
+issues:
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - errcheck
+        - gosec
+    - path: tls/
+      linters:
+        - funlen
+        - gocyclo
+        - gocognit
+        - dupl
+    - path: cryptobyte/
+      linters:
+        - funlen
+        - gocyclo
+  max-issues-per-linter: 50
+  max-same-issues: 3

@@ -1,0 +1,40 @@
+# build artifacts
+dist/
+/rxds
+/scanner
+
+# test output
+*.out
+*.test
+coverage.html
+
+# profiling
+*.prof
+cpu.prof
+mem.prof
+mem.out
+
+# scan output
+results.jsonl
+
+# IDE / tooling
+.idea/
+.vscode/
+.cursor/
+state/
+qodana.yaml
+AGENTS.md
+
+# local scripts (not shipped)
+scripts/
+
+# local-only docs
+CHANGELOG.md
+
+# temporary
+*.tmp
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
