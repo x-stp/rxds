@@ -19,11 +19,9 @@ import (
 
 func startWriter(ctx context.Context, results <-chan result, bufw *bufio.Writer) *sync.WaitGroup {
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		runWriter(ctx, results, bufw)
-	}()
+	})
 	return &wg
 }
 
@@ -126,17 +124,21 @@ func runStats(ctx context.Context, start time.Time, total uint64, att, succ *ato
 			a := att.Load()
 			s := succ.Load()
 			elapsed := time.Since(start)
-			dps := float64(a-lastAtt) / 2.0
+			rate := float64(a-lastAtt) / 2.0
 
 			ev := log.Info().
 				Str("elapsed", elapsed.Truncate(time.Second).String()).
-				Float64("dps", dps).
-				Uint64("att", a).
+				Float64("rate", rate).
+				Uint64("attempts", a).
 				Uint64("certs", s)
 
-			if total > 0 && dps > 0 {
+			if a > 0 {
+				ev = ev.Str("hit_rate", fmt.Sprintf("%.2f%%", 100*float64(s)/float64(a)))
+			}
+
+			if total > 0 && rate > 0 {
 				pct := float64(a) / float64(total) * 100.0
-				remaining := time.Duration(float64(total-a)/dps) * time.Second
+				remaining := time.Duration(float64(total-a)/rate) * time.Second
 				ev = ev.Str("progress", fmt.Sprintf("%.4f%%", pct)).
 					Str("eta", remaining.Truncate(time.Second).String())
 			}
