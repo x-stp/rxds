@@ -282,7 +282,7 @@ flowchart LR
     end
 
     subgraph out [Output]
-        enc["json.Encoder"]
+        enc["JSONL writer"]
         bufw["bufio.Writer (1 MiB)"]
         jsonl[JSONL file]
     end
@@ -363,10 +363,13 @@ The template ClientHello eliminates 35 allocations per dial compared to rebuildi
 rxds/
   cmd/rxds/           CLI entry point
   dial.go             DialForCert -- the public scan API
+  dialer_linux.go     Linux scan dialer tuning (SO_LINGER=0, TCP_FASTOPEN, buffers)
+  dialer_other.go     Default scan dialer for non-Linux platforms
   preheat.go          PreHeatCPU -- warms AES-GCM / ChaCha20 hardware
   tls/                forked crypto/tls: CertsOnly, SSLv2, template ClientHello
   jarm/               JARM probe builder, ServerHello parser, hash computation
   normalize/          certificate normalization (CN, SANs, root domains, fuzzy hash)
+  scan/syn/           Linux raw SYN pre-filter for IPv4 host discovery
   internal/
     cpu/              CPU feature detection (AES-NI, AVX)
     cryptobyte/       TLS byte parsing/building (forked from x/crypto)
