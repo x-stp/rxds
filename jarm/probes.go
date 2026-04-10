@@ -44,7 +44,7 @@ type probeSpec struct {
 	noTLS13Suites bool
 }
 
-// probeSpecs matches the queue array from reference jarm.py main().
+// probeSpecs matches the queue array from reference jarm.py(salesforce, main().)
 var probeSpecs = [probeCount]probeSpec{
 	{0x0303, 0x0303, orderForward, false, alpnStandard, ver12Support, false},  // tls1_2_forward
 	{0x0303, 0x0303, orderReverse, false, alpnStandard, ver12Support, false},  // tls1_2_reverse

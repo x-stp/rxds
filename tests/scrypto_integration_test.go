@@ -5,7 +5,6 @@ package rxds_test
 
 import (
 	"context"
-	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
 	"os"
@@ -75,8 +74,7 @@ func TestDialForCertLiveTarget(t *testing.T) {
 	}
 }
 
+// sha256Fingerprint returns sha256 of DER bytes.
 func sha256Fingerprint(c *x509.Certificate) string {
-	// Using the raw cert bytes (DER) is stable and cheap.
-	sum := sha256.Sum256(c.Raw)
-	return hex.EncodeToString(sum[:])
+	return hex.EncodeToString(c.Raw)
 }

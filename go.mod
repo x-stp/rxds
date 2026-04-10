@@ -3,6 +3,7 @@ module github.com/x-stp/rxds
 go 1.25.8
 
 require (
+	github.com/google/gopacket v1.1.19
 	github.com/rs/zerolog v1.33.0
 	github.com/weppos/publicsuffix-go v0.50.1
 	golang.org/x/crypto v0.49.0
