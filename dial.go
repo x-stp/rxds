@@ -12,6 +12,39 @@ import (
 	"github.com/x-stp/rxds/tls"
 )
 
+func dialForCertConn(
+	ctx context.Context,
+	dialer *net.Dialer,
+	network, addr string,
+	config *tls.Config,
+) ([]*x509.Certificate, error) {
+	if dialer == nil {
+		dialer = scanDialer
+	}
+	rawConn, err := dialer.DialContext(ctx, network, addr)
+	if err != nil {
+		return nil, err
+	}
+	defer rawConn.Close()
+
+	if deadline, ok := ctx.Deadline(); ok {
+		if err := rawConn.SetDeadline(deadline); err != nil {
+			return nil, err
+		}
+	}
+
+	conn := tls.Client(rawConn, config)
+	err = conn.HandshakeContext(ctx)
+	if err != nil && !errors.Is(err, tls.ErrExpected) {
+		tls.PutConn(conn)
+		return nil, err
+	}
+
+	certs := conn.ConnectionState().PeerCertificates
+	tls.PutConn(conn)
+	return certs, nil
+}
+
 func DialForCert(ctx context.Context, network, addr string, config *tls.Config) ([]*x509.Certificate, error) {
 	if config == nil {
 		config = &tls.Config{}
@@ -28,21 +61,19 @@ func DialForCert(ctx context.Context, network, addr string, config *tls.Config) 
 		}
 	}
 
-	rawConn, err := scanDialer.DialContext(ctx, network, addr)
-	if err != nil {
-		return nil, err
+	return dialForCertConn(ctx, scanDialer, network, addr, conf)
+}
+
+// DialForCertRaw is like DialForCert, but assumes config is already prepared
+// for cert harvesting and owned by the caller.
+func DialForCertRaw(
+	ctx context.Context,
+	dialer *net.Dialer,
+	network, addr string,
+	config *tls.Config,
+) ([]*x509.Certificate, error) {
+	if config == nil {
+		config = &tls.Config{}
 	}
-
-	if deadline, ok := ctx.Deadline(); ok {
-		rawConn.SetDeadline(deadline)
-	}
-
-	conn := tls.Client(rawConn, conf)
-	defer conn.Close()
-
-	if err := conn.Handshake(); err != nil && !errors.Is(err, tls.ErrExpected) {
-		return nil, err
-	}
-
-	return conn.ConnectionState().PeerCertificates, nil
+	return dialForCertConn(ctx, dialer, network, addr, config)
 }

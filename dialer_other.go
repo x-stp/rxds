@@ -7,4 +7,9 @@ package rxds
 
 import "net"
 
-var scanDialer = &net.Dialer{} // hi plan9, aix, and such.
+// ScanDialer returns the default dialer on non-Linux platforms.
+func ScanDialer() *net.Dialer {
+	return &net.Dialer{}
+}
+
+var scanDialer = ScanDialer()
