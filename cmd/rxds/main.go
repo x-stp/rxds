@@ -8,10 +8,8 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/binary"
-	"encoding/json"
 	"flag"
 	"fmt"
-	"io"
 	"net/netip"
 	"os"
 	"os/signal"
@@ -123,14 +121,17 @@ func main() {
 
 	var wg sync.WaitGroup
 	for range *concurrency {
+		w := newWorker(cfg, *timeout)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for t := range targets {
 				attempts.Add(1)
-				res := scanOne(ctx, t, cfg, *timeout, uint16(*port), *enableJARM)
-				if shouldEmit(res, *printErrors, *printEmpty) {
+				res := w.scanOne(ctx, t, *enableJARM)
+				if res.Err == "" {
 					success.Add(1)
+				}
+				if shouldEmit(res, *printErrors, *printEmpty) {
 					select {
 					case results <- res:
 					case <-ctx.Done():
@@ -150,25 +151,7 @@ func main() {
 	statsDone := make(chan struct{})
 	go runStats(ctx, startTime, totalTargets, &attempts, &success, statsDone)
 
-	var writeWG sync.WaitGroup
-	writeWG.Add(1)
-	go func() {
-		defer writeWG.Done()
-		enc := json.NewEncoder(bufw)
-		ticker := time.NewTicker(1 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case r, ok := <-results:
-				if !ok {
-					return
-				}
-				_ = enc.Encode(r)
-			case <-ticker.C:
-				bufw.Flush()
-			}
-		}
-	}()
+	writeWG := startWriter(ctx, results, bufw)
 
 	var nTargets atomic.Uint64
 	userQ := make(chan target, *concurrency*16)
@@ -239,58 +222,10 @@ func main() {
 	log.Info().Uint64("targets", nTargets.Load()).Uint64("certs", success.Load()).Str("elapsed", elapsed.String()).Msg("done")
 }
 
-func runStats(ctx context.Context, start time.Time, total uint64, att, succ *atomic.Uint64, done chan struct{}) {
-	defer close(done)
-	ticker := time.NewTicker(2 * time.Second)
-	defer ticker.Stop()
-	var lastAtt, lastSucc uint64
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			a := att.Load()
-			s := succ.Load()
-			elapsed := time.Since(start)
-			dps := float64(a-lastAtt) / 2.0
-			rps := float64(s-lastSucc) / 2.0
-
-			ev := log.Info().
-				Str("elapsed", elapsed.Truncate(time.Second).String()).
-				Float64("dps", dps).
-				Float64("rps", rps).
-				Uint64("att", a).
-				Uint64("certs", s)
-
-			if total > 0 && dps > 0 {
-				pct := float64(a) / float64(total) * 100.0
-				remaining := time.Duration(float64(total-a)/dps) * time.Second
-				ev = ev.Str("progress", fmt.Sprintf("%.4f%%", pct)).
-					Str("eta", remaining.Truncate(time.Second).String())
-			}
-
-			ev.Msg("stats")
-			lastAtt = a
-			lastSucc = s
-		}
-	}
-}
-
 func cryptoSeed() uint32 {
 	var b [4]byte
 	rand.Read(b[:])
 	return binary.BigEndian.Uint32(b[:])
-}
-
-func openOutput(path string) io.WriteCloser {
-	if path == "" {
-		return os.Stdout
-	}
-	f, err := os.Create(path)
-	if err != nil {
-		log.Fatal().Err(err).Str("out", path).Msg("failed to create output file")
-	}
-	return f
 }
 
 func isTerminal(f *os.File) bool {

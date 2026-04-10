@@ -9,7 +9,6 @@ import (
 	"encoding/hex"
 	"net"
 	"net/netip"
-	"strconv"
 	"time"
 
 	"github.com/x-stp/rxds"
@@ -17,6 +16,24 @@ import (
 	"github.com/x-stp/rxds/normalize"
 	"github.com/x-stp/rxds/tls"
 )
+
+type worker struct {
+	dialer  *net.Dialer
+	cfg     *tls.Config
+	timeout time.Duration
+}
+
+func newWorker(baseCfg *tls.Config, timeout time.Duration) *worker {
+	cfg := baseCfg.Clone()
+	cfg.CertsOnly = true
+	cfg.InsecureSkipVerify = true
+	cfg.WarmHelloTemplate()
+	return &worker{
+		dialer:  rxds.ScanDialer(),
+		cfg:     cfg,
+		timeout: timeout,
+	}
+}
 
 type target struct {
 	IP   netip.Addr
@@ -40,24 +57,19 @@ type result struct {
 
 var emptyStrings = []string{}
 
-func scanOne(ctx context.Context, t target, baseCfg *tls.Config, timeout time.Duration, defaultPort uint16, doJARM bool) result {
+func (w *worker) scanOne(ctx context.Context, t target, doJARM bool) result {
 	ipStr := t.IP.String()
 	r := result{
 		IP:   ipStr,
 		Port: t.Port,
-		SNI:  baseCfg.ServerName,
+		SNI:  w.cfg.ServerName,
 	}
 
-	dialCtx, cancel := context.WithTimeout(ctx, timeout)
+	dialCtx, cancel := context.WithTimeout(ctx, w.timeout)
 	defer cancel()
 
-	var addr string
-	if t.Port == defaultPort {
-		addr = net.JoinHostPort(ipStr, strconv.FormatUint(uint64(defaultPort), 10))
-	} else {
-		addr = net.JoinHostPort(ipStr, strconv.FormatUint(uint64(t.Port), 10))
-	}
-	certs, err := rxds.DialForCert(dialCtx, "tcp", addr, baseCfg)
+	addr := netip.AddrPortFrom(t.IP, t.Port).String()
+	certs, err := rxds.DialForCertRaw(dialCtx, w.dialer, "tcp", addr, w.cfg)
 	if err != nil {
 		r.Err = err.Error()
 		return r
@@ -85,11 +97,11 @@ func scanOne(ctx context.Context, t target, baseCfg *tls.Config, timeout time.Du
 	r.SHA256Fingerprint = hex.EncodeToString(sum[:])
 
 	if doJARM {
-		host := baseCfg.ServerName
+		host := w.cfg.ServerName
 		if host == "" {
 			host = ipStr
 		}
-		if fp, err := jarm.Fingerprint(dialCtx, host, t.Port, timeout); err == nil {
+		if fp, err := jarm.Fingerprint(dialCtx, host, t.Port, w.timeout); err == nil {
 			r.JARM = fp
 		}
 	}

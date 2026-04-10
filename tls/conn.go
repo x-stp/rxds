@@ -80,6 +80,62 @@ type Conn struct {
 	tmp [16]byte
 }
 
+var connPool sync.Pool
+
+func getConn() *Conn {
+	if v, ok := connPool.Get().(*Conn); ok {
+		return v
+	}
+	c := new(Conn)
+	c.rawInput.Grow(16896)
+	c.hand.Grow(16384)
+	return c
+}
+
+func putConn(c *Conn) {
+	c.conn = nil
+	c.isClient = false
+	c.handshakeFn = nil
+	c.handshakeStatus = 0
+	c.handshakeErr = nil
+	c.vers = 0
+	c.haveVers = false
+	c.config = nil
+	c.handshakes = 0
+	c.didResume = false
+	c.cipherSuite = 0
+	c.ocspResponse = nil
+	c.scts = nil
+	c.peerCertificates = nil
+	c.verifiedChains = nil
+	c.serverName = ""
+	c.secureRenegotiation = false
+	c.ekm = nil
+	c.resumptionSecret = nil
+	c.handshakeLog = nil
+	c.ticketKeys = nil
+	c.clientFinishedIsFirst = false
+	c.closeNotifyErr = nil
+	c.closeNotifySent = false
+	c.clientFinished = [12]byte{}
+	c.serverFinished = [12]byte{}
+	c.clientProtocol = ""
+	c.in = halfConn{}
+	c.out = halfConn{}
+	c.rawInput.Reset()
+	c.input.Reset(nil)
+	c.hand.Reset()
+	c.buffering = false
+	c.sendBuf = nil
+	c.helloBuf = nil
+	c.bytesSent = 0
+	c.packetsSent = 0
+	c.retryCount = 0
+	c.activeCall = 0
+	c.tmp = [16]byte{}
+	connPool.Put(c)
+}
+
 func (c *Conn) LocalAddr() net.Addr {
 	return c.conn.LocalAddr()
 }
@@ -819,6 +875,13 @@ var outBufPool = sync.Pool{
 	},
 }
 
+var handshakeBufPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, 0, 8192)
+		return &b
+	},
+}
+
 func (c *Conn) writeRecordLocked(typ recordType, data []byte) (int, error) {
 	outBufPtr := outBufPool.Get().(*[]byte)
 	outBuf := *outBufPtr
@@ -959,12 +1022,18 @@ func (c *Conn) readHandshake() (any, error) {
 		return nil, c.in.setErrorLocked(c.sendAlert(AlertUnexpectedMessage))
 	}
 
-	// Always copy handshake messages.
-	//
-	// Most message structs keep references to the backing bytes (slices/fields and m.raw).
-	// The handshake buffer can be re-used/overwritten by subsequent reads, so aliasing it
-	// is unsafe and can cause corruption/panics under load.
-	data = append([]byte(nil), data...)
+	need := len(data)
+	bp := handshakeBufPool.Get().(*[]byte)
+	buf := *bp
+	if cap(buf) < need {
+		buf = make([]byte, need)
+	} else {
+		buf = buf[:need]
+	}
+	copy(buf, data)
+	*bp = buf
+	handshakeBufPool.Put(bp)
+	data = buf
 
 	if !m.unmarshal(data) {
 		return nil, c.in.setErrorLocked(c.sendAlert(AlertUnexpectedMessage))

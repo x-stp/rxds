@@ -22,22 +22,25 @@ func Client(conn net.Conn, config *Config) *Conn {
 	if config == nil {
 		config = defaultConfig()
 	}
-	// This library is cert-harvest-only: always stop after receiving the server
-	// certificate chain.
 	if !config.CertsOnly {
 		c := config.Clone()
 		c.CertsOnly = true
 		config = c
 	}
-	c := &Conn{
-		conn:     conn,
-		config:   config,
-		isClient: true,
-	}
-	c.rawInput.Grow(16896)
-	c.hand.Grow(16384)
+	c := getConn()
+	c.conn = conn
+	c.config = config
+	c.isClient = true
 	c.handshakeFn = c.clientHandshake
 	return c
+}
+
+// PutConn returns a Conn to the pool for reuse. Call after extracting
+// ConnectionState; the Conn must not be used afterwards.
+func PutConn(c *Conn) {
+	if c != nil {
+		putConn(c)
+	}
 }
 
 // DialWithDialer connects to the given network address using dialer.Dial and
