@@ -17,7 +17,7 @@ func permuteIndex(i, size, key uint32) uint32 {
 func feistel32(x, key uint32) uint32 {
 	l := uint16(x >> 16)
 	r := uint16(x)
-	for round := uint32(0); round < 4; round++ {
+	for round := range uint32(4) {
 		f := feistelF(r, key+round*0x9e37)
 		l, r = r, l^f
 	}
