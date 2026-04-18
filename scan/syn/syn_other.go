@@ -49,3 +49,8 @@ func (s *Scanner) Run(ctx context.Context, targets <-chan netip.Addr) (<-chan ne
 func (s *Scanner) Stats() (sent, received uint64) {
 	return 0, 0
 }
+
+// DiscoverDefaultIface is unsupported on non-Linux platforms.
+func DiscoverDefaultIface() (string, error) {
+	return "", errUnsupported
+}

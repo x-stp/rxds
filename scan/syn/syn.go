@@ -19,6 +19,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -84,18 +85,61 @@ func New(
 }
 
 // NewForInterface discovers the source IPv4, source MAC, and default gateway MAC
-// for ifaceName, then builds a scanner.
+// for ifaceName, then builds a scanner. An empty ifaceName triggers auto-detection
+// via /proc/net/route.
 func NewForInterface(
 	ifaceName string,
 	port uint16,
 	rate int,
 	grace time.Duration,
 ) (*Scanner, error) {
+	if ifaceName == "" {
+		detected, err := DiscoverDefaultIface()
+		if err != nil {
+			return nil, err
+		}
+		ifaceName = detected
+	}
 	srcIP, srcMAC, gwMAC, err := discoverRoute(ifaceName)
 	if err != nil {
 		return nil, err
 	}
 	return New(ifaceName, srcIP, srcMAC, gwMAC, port, rate, grace)
+}
+
+// DiscoverDefaultIface returns the first interface in /proc/net/route that has a
+// default route (Destination=0.0.0.0) with RTF_UP and RTF_GATEWAY flags set.
+func DiscoverDefaultIface() (string, error) {
+	f, err := os.Open("/proc/net/route")
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	sc := bufio.NewScanner(f)
+	first := true
+	for sc.Scan() {
+		if first {
+			first = false
+			continue
+		}
+		fields := strings.Fields(sc.Text())
+		if len(fields) < 4 || fields[1] != "00000000" {
+			continue
+		}
+		flags, err := strconv.ParseUint(fields[3], 16, 32)
+		if err != nil {
+			continue
+		}
+		if flags&0x1 == 0 || flags&0x2 == 0 {
+			continue
+		}
+		return fields[0], nil
+	}
+	if err := sc.Err(); err != nil {
+		return "", err
+	}
+	return "", errors.New("no default route found in /proc/net/route")
 }
 
 func (s *Scanner) cookieISN(dstIP netip.Addr) uint32 {
@@ -130,8 +174,23 @@ func (s *Scanner) Run(ctx context.Context, targets <-chan netip.Addr) (<-chan ne
 
 	responsive := make(chan netip.Addr, 4096)
 	runCtx, cancel := context.WithCancel(ctx)
-	go s.recvLoop(runCtx, handle, responsive)
-	go s.sendLoop(runCtx, cancel, handle, targets)
+
+	var loops sync.WaitGroup
+	loops.Add(2)
+	go func() {
+		defer loops.Done()
+		s.recvLoop(runCtx, handle, responsive)
+	}()
+	go func() {
+		defer loops.Done()
+		s.sendLoop(runCtx, cancel, handle, targets)
+	}()
+
+	go func() {
+		loops.Wait()
+		handle.Close()
+	}()
+
 	return responsive, nil
 }
 
@@ -142,7 +201,6 @@ func (s *Scanner) Stats() (sent, received uint64) {
 
 func (s *Scanner) recvLoop(ctx context.Context, handle *pcap.Handle, responsive chan<- netip.Addr) {
 	defer close(responsive)
-	defer handle.Close()
 
 	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
 	packetSource.NoCopy = true
@@ -417,6 +475,12 @@ func arpCacheHardwareAddr(
 		}
 		fields := strings.Fields(sc.Text())
 		if len(fields) < 6 || fields[0] != target || fields[5] != ifaceName {
+			continue
+		}
+		// ATF_COM (0x2) means the entry is resolved. Without it the HW addr is
+		// typically 00:00:00:00:00:00 (incomplete/failed NUD state).
+		flags, err := strconv.ParseUint(fields[2], 16, 32)
+		if err != nil || flags&0x2 == 0 {
 			continue
 		}
 		mac, err := net.ParseMAC(fields[3])
