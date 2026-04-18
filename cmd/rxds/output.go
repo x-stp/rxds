@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+
+	"github.com/x-stp/rxds/scan/syn"
 )
 
 func startWriter(ctx context.Context, results <-chan result, bufw *bufio.Writer) *sync.WaitGroup {
@@ -37,9 +39,13 @@ func runWriter(_ context.Context, results <-chan result, bufw *bufio.Writer) {
 				return
 			}
 			buf = r.appendJSONL(buf[:0])
-			bufw.Write(buf)
+			if _, err := bufw.Write(buf); err != nil {
+				log.Fatal().Err(err).Msg("output write failed")
+			}
 		case <-ticker.C:
-			bufw.Flush()
+			if err := bufw.Flush(); err != nil {
+				log.Fatal().Err(err).Msg("output flush failed")
+			}
 		}
 	}
 }
@@ -111,11 +117,11 @@ func appendKArr(buf []byte, key string, vals []string) []byte {
 	return buf
 }
 
-func runStats(ctx context.Context, start time.Time, total uint64, att, succ *atomic.Uint64, done chan struct{}) {
+func runStats(ctx context.Context, start time.Time, total uint64, att, succ *atomic.Uint64, scanner *syn.Scanner, done chan struct{}) {
 	defer close(done)
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
-	var lastAtt uint64
+	var lastAtt, lastSynTx uint64
 	for {
 		select {
 		case <-ctx.Done():
@@ -134,6 +140,18 @@ func runStats(ctx context.Context, start time.Time, total uint64, att, succ *ato
 
 			if a > 0 {
 				ev = ev.Str("hit_rate", fmt.Sprintf("%.2f%%", 100*float64(s)/float64(a)))
+			}
+
+			if scanner != nil {
+				tx, rx := scanner.Stats()
+				ev = ev.
+					Uint64("syn_tx", tx).
+					Uint64("syn_rx", rx).
+					Float64("syn_rate", float64(tx-lastSynTx)/2.0)
+				if tx > 0 {
+					ev = ev.Str("syn_hit_rate", fmt.Sprintf("%.2f%%", 100*float64(rx)/float64(tx)))
+				}
+				lastSynTx = tx
 			}
 
 			if total > 0 && rate > 0 {
