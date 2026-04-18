@@ -23,6 +23,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/x-stp/rxds"
+	"github.com/x-stp/rxds/scan/syn"
 	"github.com/x-stp/rxds/tls"
 )
 
@@ -52,17 +53,27 @@ type options struct {
 	cloudWeight int
 	noGlobal    bool
 	enableJARM  bool
+	synRate     int
+	synIface    string
+	synGrace    time.Duration
 }
 
 func main() {
 	opts := parseOptions()
 	validateOptions(opts)
 
-	global := opts.noGlobal == false && opts.cidrsPath == "" && opts.cloudSample == 0
+	global := !opts.noGlobal && opts.cidrsPath == "" && opts.cloudSample == 0
 	stdinMode := opts.noGlobal && opts.cidrsPath == "" && opts.cloudSample == 0
+	synEnabled := opts.synRate > 0
+
 	if stdinMode && isTerminal(os.Stdin) {
 		flag.Usage()
 		os.Exit(0)
+	}
+	if synEnabled && stdinMode {
+		log.Warn().
+			Uint16("port", opts.port).
+			Msg("SYN pre-filter only passes IPv4 stdin targets on the default port; other targets will be dropped")
 	}
 
 	ctx, stop := newSignalContext()
@@ -82,10 +93,23 @@ func main() {
 	targets := make(chan target, opts.concurrency*8)
 	results := make(chan result, opts.concurrency*8)
 
+	scanTargets, synScanner, err := setupScanTargets(
+		ctx,
+		targets,
+		synEnabled,
+		opts.synIface,
+		opts.port,
+		opts.synRate,
+		opts.synGrace,
+	)
+	if err != nil {
+		log.Fatal().Err(err).Str("iface", opts.synIface).Msg("failed to set up SYN pre-filter")
+	}
+
 	var attempts atomic.Uint64
 	var certs atomic.Uint64
 
-	workers := startWorkers(ctx, opts, cfg, targets, results, &attempts, &certs)
+	workers := startWorkers(ctx, opts, cfg, scanTargets, results, &attempts, &certs)
 	startTime := time.Now()
 
 	var totalTargets uint64
@@ -94,7 +118,7 @@ func main() {
 	}
 
 	statsDone := make(chan struct{})
-	go runStats(ctx, startTime, totalTargets, &attempts, &certs, statsDone)
+	go runStats(ctx, startTime, totalTargets, &attempts, &certs, synScanner, statsDone)
 
 	writeWG := startWriter(ctx, results, bufw)
 
@@ -102,7 +126,7 @@ func main() {
 	userQ := make(chan target, opts.concurrency*16)
 	cloudQ := make(chan target, opts.concurrency*16)
 
-	addTarget := newTargetAdder(ctx, deny)
+	addTarget := newTargetAdder(ctx, deny, synEnabled, opts.port)
 
 	var muxWG sync.WaitGroup
 	muxWG.Add(1)
@@ -123,7 +147,7 @@ func main() {
 	<-statsDone
 	bufw.Flush()
 
-	logDone(startTime, queued.Load(), attempts.Load(), certs.Load())
+	logDone(startTime, queued.Load(), attempts.Load(), certs.Load(), synScanner)
 }
 
 func parseOptions() options {
@@ -145,6 +169,9 @@ func parseOptions() options {
 	flag.IntVar(&opts.cloudWeight, "cloud-weight", 8, "cloud scheduling weight")
 	flag.BoolVar(&opts.noGlobal, "no-global", false, "disable default global scan (read stdin instead)")
 	flag.BoolVar(&opts.enableJARM, "jarm", false, "JARM fingerprint (10 extra conns/host)")
+	flag.IntVar(&opts.synRate, "syn-rate", 0, "SYN pre-filter packets/sec (0 = disabled)")
+	flag.StringVar(&opts.synIface, "syn-iface", "", "network interface for the SYN pre-filter (default: auto-detect from /proc/net/route)")
+	flag.DurationVar(&opts.synGrace, "syn-grace", 500*time.Millisecond, "how long to keep collecting SYN-ACKs after target input stops")
 
 	flag.Usage = func() {
 		fmt.Fprint(os.Stderr, banner)
@@ -163,6 +190,9 @@ func validateOptions(opts options) {
 	}
 	if opts.portRaw == 0 || opts.portRaw > 65535 {
 		log.Fatal().Uint("port", opts.portRaw).Msg("-port must be in 1..65535")
+	}
+	if opts.synRate < 0 {
+		log.Fatal().Int("syn-rate", opts.synRate).Msg("-syn-rate must be >= 0")
 	}
 }
 
@@ -248,9 +278,12 @@ func startWorkers(
 	return &wg
 }
 
-func newTargetAdder(ctx context.Context, deny *denylist) func(chan<- target, netip.Addr, uint16) {
+func newTargetAdder(ctx context.Context, deny *denylist, synEnabled bool, defaultPort uint16) func(chan<- target, netip.Addr, uint16) {
 	return func(q chan<- target, addr netip.Addr, port uint16) {
 		if !isGlobalIP(addr) || deny.Contains(addr) {
+			return
+		}
+		if synEnabled && (!addr.Is4() || port != defaultPort) {
 			return
 		}
 		select {
@@ -276,9 +309,11 @@ func startProducers(
 			if src == "" {
 				src = "cf"
 			}
-			_ = emitCloudSamples(ctx, strings.Split(src, ","), opts.cloudSample, seed, opts.port, func(addr netip.Addr, port uint16) {
+			if err := emitCloudSamples(ctx, strings.Split(src, ","), opts.cloudSample, seed, opts.port, func(addr netip.Addr, port uint16) {
 				addTarget(cloudQ, addr, port)
-			})
+			}); err != nil {
+				log.Error().Err(err).Str("source", src).Msg("cloud sample fetch failed")
+			}
 		})
 	}
 
@@ -298,7 +333,7 @@ func startProducers(
 	return &wg
 }
 
-func logDone(start time.Time, queued, attempts, certs uint64) {
+func logDone(start time.Time, queued, attempts, certs uint64, scanner *syn.Scanner) {
 	elapsed := time.Since(start).Truncate(time.Second)
 	entry := log.Info().
 		Uint64("queued", queued).
@@ -308,12 +343,21 @@ func logDone(start time.Time, queued, attempts, certs uint64) {
 	if attempts > 0 {
 		entry = entry.Str("hit_rate", fmt.Sprintf("%.2f%%", 100*float64(certs)/float64(attempts)))
 	}
+	if scanner != nil {
+		sent, recv := scanner.Stats()
+		entry = entry.Uint64("syn_tx", sent).Uint64("syn_rx", recv)
+		if sent > 0 {
+			entry = entry.Str("syn_hit_rate", fmt.Sprintf("%.2f%%", 100*float64(recv)/float64(sent)))
+		}
+	}
 	entry.Msg("done")
 }
 
 func cryptoSeed() uint32 {
 	var b [4]byte
-	rand.Read(b[:])
+	if _, err := rand.Read(b[:]); err != nil {
+		log.Fatal().Err(err).Msg("failed to read crypto/rand seed")
+	}
 	return binary.BigEndian.Uint32(b[:])
 }
 

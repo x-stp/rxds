@@ -127,7 +127,10 @@ func putConn(c *Conn) {
 	c.hand.Reset()
 	c.buffering = false
 	c.sendBuf = nil
-	c.helloBuf = nil
+	if c.helloBuf != nil {
+		helloBufPool.Put(c.helloBuf)
+		c.helloBuf = nil
+	}
 	c.bytesSent = 0
 	c.packetsSent = 0
 	c.retryCount = 0
@@ -875,13 +878,6 @@ var outBufPool = sync.Pool{
 	},
 }
 
-var handshakeBufPool = sync.Pool{
-	New: func() any {
-		b := make([]byte, 0, 8192)
-		return &b
-	},
-}
-
 func (c *Conn) writeRecordLocked(typ recordType, data []byte) (int, error) {
 	outBufPtr := outBufPool.Get().(*[]byte)
 	outBuf := *outBufPtr
@@ -1022,18 +1018,7 @@ func (c *Conn) readHandshake() (any, error) {
 		return nil, c.in.setErrorLocked(c.sendAlert(AlertUnexpectedMessage))
 	}
 
-	need := len(data)
-	bp := handshakeBufPool.Get().(*[]byte)
-	buf := *bp
-	if cap(buf) < need {
-		buf = make([]byte, need)
-	} else {
-		buf = buf[:need]
-	}
-	copy(buf, data)
-	*bp = buf
-	handshakeBufPool.Put(bp)
-	data = buf
+	data = append([]byte(nil), data...)
 
 	if !m.unmarshal(data) {
 		return nil, c.in.setErrorLocked(c.sendAlert(AlertUnexpectedMessage))
