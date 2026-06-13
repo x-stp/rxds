@@ -763,7 +763,11 @@ func (m *serverHelloMsg) unmarshal(data []byte) bool {
 			fullExt[1] = byte(extension)
 			fullExt[2] = byte(len(extData) >> 8)
 			fullExt[3] = byte(len(extData))
-			copy(fullExt[4:], extData)
+			var extBody []byte
+			if !extData.ReadBytes(&extBody, len(extData)) {
+				return false
+			}
+			copy(fullExt[4:], extBody)
 			m.unknownExtensions = append(m.unknownExtensions, fullExt)
 		}
 

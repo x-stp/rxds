@@ -263,13 +263,7 @@ func (c *Conn) clientHandshake() (err error) {
 	}
 
 	if c.config.CertsOnly {
-		c.handshakeLog = &HandshakeLog{
-			ClientHelloRaw: hello.marshal(),
-			ServerHelloRaw: serverHello.marshal(),
-			ServerVersion:  c.vers,
-			ServerRandom:   serverHello.random,
-			ServerCipher:   serverHello.cipherSuite,
-		}
+		c.handshakeLog = newHandshakeLog(hello, serverHello, c.vers)
 	}
 
 	// Downgrade canary checks. RFC 8446 Section 4.1.3.
@@ -362,6 +356,16 @@ func (c *Conn) loadSession(hello *clientHelloMsg) (string, *ClientSessionState) 
 	}
 
 	return cacheKey, nil
+}
+
+func newHandshakeLog(hello *clientHelloMsg, serverHello *serverHelloMsg, version uint16) *HandshakeLog {
+	return &HandshakeLog{
+		ClientHelloRaw: append([]byte(nil), hello.marshal()...),
+		ServerHelloRaw: append([]byte(nil), serverHello.marshal()...),
+		ServerVersion:  version,
+		ServerRandom:   append([]byte(nil), serverHello.random...),
+		ServerCipher:   serverHello.cipherSuite,
+	}
 }
 
 func (c *Conn) pickTLSVersion(serverHello *serverHelloMsg) error {
