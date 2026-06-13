@@ -25,7 +25,8 @@ import (
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
-	"github.com/google/gopacket/pcap"
+	"golang.org/x/net/bpf"
+	"golang.org/x/sys/unix"
 )
 
 // Scanner sends raw SYNs and reports the IPv4 addresses that answer with SYN-ACK.
@@ -160,15 +161,8 @@ func (s *Scanner) cookieISN(dstIP netip.Addr) uint32 {
 // Run starts the pre-filter. Targets are IPv4 addresses only; non-IPv4 targets are
 // ignored. The returned channel yields targets that answered with SYN-ACK.
 func (s *Scanner) Run(ctx context.Context, targets <-chan netip.Addr) (<-chan netip.Addr, error) {
-	handle, err := pcap.OpenLive(s.iface, 96, false, 100*time.Millisecond)
+	handle, err := openPacketSocket(s.iface, s.srcIP, s.port)
 	if err != nil {
-		return nil, err
-	}
-	bpf := "tcp and dst host " + s.srcIP.String() +
-		" and src port " + strconv.Itoa(int(s.port)) +
-		" and tcp[13] == 18"
-	if err := handle.SetBPFFilter(bpf); err != nil {
-		handle.Close()
 		return nil, err
 	}
 
@@ -199,11 +193,10 @@ func (s *Scanner) Stats() (sent, received uint64) {
 	return s.sent.Load(), s.received.Load()
 }
 
-func (s *Scanner) recvLoop(ctx context.Context, handle *pcap.Handle, responsive chan<- netip.Addr) {
+func (s *Scanner) recvLoop(ctx context.Context, handle *packetSocket, responsive chan<- netip.Addr) {
 	defer close(responsive)
 
-	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
-	packetSource.NoCopy = true
+	buf := make([]byte, 2048)
 
 	for {
 		select {
@@ -212,13 +205,14 @@ func (s *Scanner) recvLoop(ctx context.Context, handle *pcap.Handle, responsive 
 		default:
 		}
 
-		packet, err := packetSource.NextPacket()
+		n, err := handle.ReadPacketData(buf)
 		if err != nil {
 			if ctx.Err() != nil {
 				return
 			}
 			continue
 		}
+		packet := gopacket.NewPacket(buf[:n], layers.LayerTypeEthernet, gopacket.NoCopy)
 
 		tcpLayer := packet.Layer(layers.LayerTypeTCP)
 		ipLayer := packet.Layer(layers.LayerTypeIPv4)
@@ -242,7 +236,9 @@ func (s *Scanner) recvLoop(ctx context.Context, handle *pcap.Handle, responsive 
 			continue
 		}
 		addr = addr.Unmap()
-		// per RFC 793 and RFC 9293, a SYN-ACK acknowledges our ISN plus one.
+		if tcp.Ack == 0 {
+			continue
+		}
 		if uint32(tcp.Ack)-1 != s.cookieISN(addr) {
 			continue
 		}
@@ -259,7 +255,7 @@ func (s *Scanner) recvLoop(ctx context.Context, handle *pcap.Handle, responsive 
 func (s *Scanner) sendLoop(
 	ctx context.Context,
 	cancel context.CancelFunc,
-	handle *pcap.Handle,
+	handle *packetSocket,
 	targets <-chan netip.Addr,
 ) {
 	defer cancel()
@@ -327,7 +323,7 @@ func (s *Scanner) sendLoop(
 				buf.Clear()
 				continue
 			}
-			if err := handle.WritePacketData(buf.Bytes()); err != nil {
+			if err := handle.WritePacketData(buf.Bytes(), s.gwMAC); err != nil {
 				buf.Clear()
 				continue
 			}
@@ -336,6 +332,112 @@ func (s *Scanner) sendLoop(
 			buf.Clear()
 		}
 	}
+}
+
+type packetSocket struct {
+	fd      int
+	ifindex int
+}
+
+func openPacketSocket(ifaceName string, srcIP netip.Addr, port uint16) (*packetSocket, error) {
+	iface, err := net.InterfaceByName(ifaceName)
+	if err != nil {
+		return nil, err
+	}
+	fd, err := unix.Socket(unix.AF_PACKET, unix.SOCK_RAW|unix.SOCK_CLOEXEC, int(htons(unix.ETH_P_ALL)))
+	if err != nil {
+		return nil, err
+	}
+	ps := &packetSocket{fd: fd, ifindex: iface.Index}
+	if err := ps.bind(); err != nil {
+		ps.Close()
+		return nil, err
+	}
+	if err := ps.setReadTimeout(100 * time.Millisecond); err != nil {
+		ps.Close()
+		return nil, err
+	}
+	if err := ps.attachFilter(srcIP, port); err != nil {
+		ps.Close()
+		return nil, err
+	}
+	return ps, nil
+}
+
+func (ps *packetSocket) bind() error {
+	return unix.Bind(ps.fd, &unix.SockaddrLinklayer{
+		Protocol: htons(unix.ETH_P_ALL),
+		Ifindex:  ps.ifindex,
+	})
+}
+
+func (ps *packetSocket) setReadTimeout(timeout time.Duration) error {
+	tv := unix.NsecToTimeval(timeout.Nanoseconds())
+	return unix.SetsockoptTimeval(ps.fd, unix.SOL_SOCKET, unix.SO_RCVTIMEO, &tv)
+}
+
+func (ps *packetSocket) attachFilter(srcIP netip.Addr, port uint16) error {
+	raw, err := bpf.Assemble(synAckFilter(srcIP, port))
+	if err != nil {
+		return err
+	}
+	filters := make([]unix.SockFilter, len(raw))
+	for i, ins := range raw {
+		filters[i] = unix.SockFilter{
+			Code: ins.Op,
+			Jt:   ins.Jt,
+			Jf:   ins.Jf,
+			K:    ins.K,
+		}
+	}
+	prog := unix.SockFprog{Len: uint16(len(filters)), Filter: &filters[0]}
+	return unix.SetsockoptSockFprog(ps.fd, unix.SOL_SOCKET, unix.SO_ATTACH_FILTER, &prog)
+}
+
+func synAckFilter(srcIP netip.Addr, port uint16) []bpf.Instruction {
+	src4 := srcIP.As4()
+	return []bpf.Instruction{
+		bpf.LoadAbsolute{Off: 12, Size: 2},
+		bpf.JumpIf{Cond: bpf.JumpEqual, Val: uint32(layers.EthernetTypeIPv4), SkipFalse: 10},
+		bpf.LoadAbsolute{Off: 23, Size: 1},
+		bpf.JumpIf{Cond: bpf.JumpEqual, Val: uint32(layers.IPProtocolTCP), SkipFalse: 8},
+		bpf.LoadAbsolute{Off: 30, Size: 4},
+		bpf.JumpIf{Cond: bpf.JumpEqual, Val: binary.BigEndian.Uint32(src4[:]), SkipFalse: 6},
+		bpf.LoadMemShift{Off: 14},
+		bpf.LoadIndirect{Off: 14, Size: 2},
+		bpf.JumpIf{Cond: bpf.JumpEqual, Val: uint32(port), SkipFalse: 3},
+		bpf.LoadIndirect{Off: 27, Size: 1},
+		bpf.JumpIf{Cond: bpf.JumpEqual, Val: 0x12, SkipFalse: 1},
+		bpf.RetConstant{Val: 96},
+		bpf.RetConstant{Val: 0},
+	}
+}
+
+func (ps *packetSocket) ReadPacketData(buf []byte) (int, error) {
+	n, _, err := unix.Recvfrom(ps.fd, buf, 0)
+	if err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
+func (ps *packetSocket) WritePacketData(data []byte, dst net.HardwareAddr) error {
+	var addr [8]byte
+	copy(addr[:], dst)
+	return unix.Sendto(ps.fd, data, 0, &unix.SockaddrLinklayer{
+		Protocol: htons(unix.ETH_P_IP),
+		Ifindex:  ps.ifindex,
+		Halen:    uint8(len(dst)),
+		Addr:     addr,
+	})
+}
+
+func (ps *packetSocket) Close() {
+	_ = unix.Close(ps.fd)
+}
+
+func htons(v uint16) uint16 {
+	return v<<8 | v>>8
 }
 
 func discoverRoute(ifaceName string) (netip.Addr, net.HardwareAddr, net.HardwareAddr, error) {
