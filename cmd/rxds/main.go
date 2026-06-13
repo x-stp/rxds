@@ -10,6 +10,7 @@ import (
 	"encoding/binary"
 	"flag"
 	"fmt"
+	"net"
 	"net/netip"
 	"os"
 	"os/signal"
@@ -56,6 +57,10 @@ type options struct {
 	synRate     int
 	synIface    string
 	synGrace    time.Duration
+	synSrcIP    string
+	synSrcMAC   string
+	synGateway  string
+	synGwMAC    string
 }
 
 func main() {
@@ -101,6 +106,7 @@ func main() {
 		opts.port,
 		opts.synRate,
 		opts.synGrace,
+		synRouteOverrides(opts),
 	)
 	if err != nil {
 		log.Fatal().Err(err).Str("iface", opts.synIface).Msg("failed to set up SYN pre-filter")
@@ -172,6 +178,10 @@ func parseOptions() options {
 	flag.IntVar(&opts.synRate, "syn-rate", 0, "SYN pre-filter packets/sec (0 = disabled)")
 	flag.StringVar(&opts.synIface, "syn-iface", "", "network interface for the SYN pre-filter (default: auto-detect from /proc/net/route)")
 	flag.DurationVar(&opts.synGrace, "syn-grace", 500*time.Millisecond, "how long to keep collecting SYN-ACKs after target input stops")
+	flag.StringVar(&opts.synSrcIP, "syn-src-ip", "", "source IPv4 for SYN pre-filter (default: interface IPv4)")
+	flag.StringVar(&opts.synSrcMAC, "syn-src-mac", "", "source MAC for SYN pre-filter (default: interface MAC)")
+	flag.StringVar(&opts.synGateway, "syn-gateway", "", "gateway/router IPv4 for SYN pre-filter (default: route table)")
+	flag.StringVar(&opts.synGwMAC, "syn-gateway-mac", "", "gateway/router MAC for SYN pre-filter (default: ARP)")
 
 	flag.Usage = func() {
 		fmt.Fprint(os.Stderr, banner)
@@ -194,6 +204,40 @@ func validateOptions(opts options) {
 	if opts.synRate < 0 {
 		log.Fatal().Int("syn-rate", opts.synRate).Msg("-syn-rate must be >= 0")
 	}
+	if opts.synGrace < 0 {
+		log.Fatal().Dur("syn-grace", opts.synGrace).Msg("-syn-grace must be >= 0")
+	}
+}
+
+func synRouteOverrides(opts options) syn.RouteOverrides {
+	return syn.RouteOverrides{
+		SrcIP:      parseOptionalIPv4("syn-src-ip", opts.synSrcIP),
+		SrcMAC:     parseOptionalMAC("syn-src-mac", opts.synSrcMAC),
+		GatewayIP:  parseOptionalIPv4("syn-gateway", opts.synGateway),
+		GatewayMAC: parseOptionalMAC("syn-gateway-mac", opts.synGwMAC),
+	}
+}
+
+func parseOptionalIPv4(name, value string) netip.Addr {
+	if value == "" {
+		return netip.Addr{}
+	}
+	addr, err := netip.ParseAddr(value)
+	if err != nil || !addr.Is4() {
+		log.Fatal().Str(name, value).Msg("flag must be an IPv4 address")
+	}
+	return addr
+}
+
+func parseOptionalMAC(name, value string) net.HardwareAddr {
+	if value == "" {
+		return nil
+	}
+	mac, err := net.ParseMAC(value)
+	if err != nil {
+		log.Fatal().Str(name, value).Msg("flag must be a MAC address")
+	}
+	return mac
 }
 
 func newSignalContext() (context.Context, context.CancelFunc) {

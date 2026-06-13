@@ -19,12 +19,13 @@ func setupScanTargets(
 	port uint16,
 	rate int,
 	grace time.Duration,
+	overrides syn.RouteOverrides,
 ) (<-chan target, *syn.Scanner, error) {
 	if !synEnabled {
 		return source, nil, nil
 	}
 
-	scanner, err := syn.NewForInterface(iface, port, rate, grace)
+	scanner, err := syn.NewForInterfaceWithOverrides(iface, port, rate, grace, overrides)
 	if err != nil {
 		return nil, nil, err
 	}

@@ -43,6 +43,13 @@ type Scanner struct {
 	received atomic.Uint64
 }
 
+type RouteOverrides struct {
+	SrcIP      netip.Addr
+	SrcMAC     net.HardwareAddr
+	GatewayIP  netip.Addr
+	GatewayMAC net.HardwareAddr
+}
+
 // New creates a scanner from explicit interface parameters.
 func New(
 	iface string,
@@ -94,6 +101,16 @@ func NewForInterface(
 	rate int,
 	grace time.Duration,
 ) (*Scanner, error) {
+	return NewForInterfaceWithOverrides(ifaceName, port, rate, grace, RouteOverrides{})
+}
+
+func NewForInterfaceWithOverrides(
+	ifaceName string,
+	port uint16,
+	rate int,
+	grace time.Duration,
+	overrides RouteOverrides,
+) (*Scanner, error) {
 	if ifaceName == "" {
 		detected, err := DiscoverDefaultIface()
 		if err != nil {
@@ -101,7 +118,7 @@ func NewForInterface(
 		}
 		ifaceName = detected
 	}
-	srcIP, srcMAC, gwMAC, err := discoverRoute(ifaceName)
+	srcIP, srcMAC, gwMAC, err := discoverRoute(ifaceName, overrides)
 	if err != nil {
 		return nil, err
 	}
@@ -260,7 +277,7 @@ func (s *Scanner) sendLoop(
 ) {
 	defer cancel()
 
-	interval := time.Second / time.Duration(s.rate)
+	interval := sendInterval(s.rate)
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -394,25 +411,6 @@ func (ps *packetSocket) attachFilter(srcIP netip.Addr, port uint16) error {
 	return unix.SetsockoptSockFprog(ps.fd, unix.SOL_SOCKET, unix.SO_ATTACH_FILTER, &prog)
 }
 
-func synAckFilter(srcIP netip.Addr, port uint16) []bpf.Instruction {
-	src4 := srcIP.As4()
-	return []bpf.Instruction{
-		bpf.LoadAbsolute{Off: 12, Size: 2},
-		bpf.JumpIf{Cond: bpf.JumpEqual, Val: uint32(layers.EthernetTypeIPv4), SkipFalse: 10},
-		bpf.LoadAbsolute{Off: 23, Size: 1},
-		bpf.JumpIf{Cond: bpf.JumpEqual, Val: uint32(layers.IPProtocolTCP), SkipFalse: 8},
-		bpf.LoadAbsolute{Off: 30, Size: 4},
-		bpf.JumpIf{Cond: bpf.JumpEqual, Val: binary.BigEndian.Uint32(src4[:]), SkipFalse: 6},
-		bpf.LoadMemShift{Off: 14},
-		bpf.LoadIndirect{Off: 14, Size: 2},
-		bpf.JumpIf{Cond: bpf.JumpEqual, Val: uint32(port), SkipFalse: 3},
-		bpf.LoadIndirect{Off: 27, Size: 1},
-		bpf.JumpIf{Cond: bpf.JumpEqual, Val: 0x12, SkipFalse: 1},
-		bpf.RetConstant{Val: 96},
-		bpf.RetConstant{Val: 0},
-	}
-}
-
 func (ps *packetSocket) ReadPacketData(buf []byte) (int, error) {
 	n, _, err := unix.Recvfrom(ps.fd, buf, 0)
 	if err != nil {
@@ -436,31 +434,92 @@ func (ps *packetSocket) Close() {
 	_ = unix.Close(ps.fd)
 }
 
-func htons(v uint16) uint16 {
-	return v<<8 | v>>8
-}
-
-func discoverRoute(ifaceName string) (netip.Addr, net.HardwareAddr, net.HardwareAddr, error) {
+func discoverRoute(ifaceName string, overrides RouteOverrides) (netip.Addr, net.HardwareAddr, net.HardwareAddr, error) {
 	iface, err := net.InterfaceByName(ifaceName)
 	if err != nil {
 		return netip.Addr{}, nil, nil, err
 	}
+
+	srcIP, err := sourceIPv4Addr(iface, overrides.SrcIP)
+	if err != nil {
+		return netip.Addr{}, nil, nil, err
+	}
+	srcMAC, err := sourceHardwareAddr(iface, overrides.SrcMAC)
+	if err != nil {
+		return netip.Addr{}, nil, nil, err
+	}
+	gatewayIP, err := gatewayIPv4(ifaceName, overrides.GatewayIP)
+	if err != nil {
+		return netip.Addr{}, nil, nil, err
+	}
+	gwMAC, err := gatewayHardwareAddr(ifaceName, srcIP, gatewayIP, overrides.GatewayMAC)
+	if err != nil {
+		return netip.Addr{}, nil, nil, err
+	}
+	return srcIP, srcMAC, gwMAC, nil
+}
+
+func sourceIPv4Addr(iface *net.Interface, override netip.Addr) (netip.Addr, error) {
+	if override.IsValid() {
+		if !override.Is4() {
+			return netip.Addr{}, errors.New("SYN source address must be IPv4")
+		}
+		return override, nil
+	}
+	return interfaceIPv4Addr(iface)
+}
+
+func sourceHardwareAddr(iface *net.Interface, override net.HardwareAddr) (net.HardwareAddr, error) {
+	if len(override) > 0 {
+		return append(net.HardwareAddr(nil), override...), nil
+	}
 	if len(iface.HardwareAddr) == 0 {
-		return netip.Addr{}, nil, nil, errors.New("interface has no hardware address")
+		return nil, errors.New("interface has no hardware address")
 	}
-	srcIP, err := interfaceIPv4Addr(iface)
+	return iface.HardwareAddr, nil
+}
+
+func gatewayIPv4(ifaceName string, override netip.Addr) (netip.Addr, error) {
+	if override.IsValid() {
+		if !override.Is4() {
+			return netip.Addr{}, errors.New("SYN gateway address must be IPv4")
+		}
+		return override, nil
+	}
+	return defaultGatewayIPv4(ifaceName)
+}
+
+func gatewayHardwareAddr(
+	ifaceName string,
+	srcIP, gatewayIP netip.Addr,
+	override net.HardwareAddr,
+) (net.HardwareAddr, error) {
+	if len(override) > 0 {
+		return append(net.HardwareAddr(nil), override...), nil
+	}
+	mac, ok, err := arpCacheHardwareAddr(ifaceName, gatewayIP)
 	if err != nil {
-		return netip.Addr{}, nil, nil, err
+		return nil, err
 	}
-	gatewayIP, err := defaultGatewayIPv4(ifaceName)
-	if err != nil {
-		return netip.Addr{}, nil, nil, err
+	if ok {
+		return mac, nil
 	}
-	gwMAC, err := gatewayHardwareAddr(ifaceName, srcIP, gatewayIP)
-	if err != nil {
-		return netip.Addr{}, nil, nil, err
+	if err := warmARPEntry(srcIP, gatewayIP); err != nil {
+		return nil, err
 	}
-	return srcIP, iface.HardwareAddr, gwMAC, nil
+
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		mac, ok, err = arpCacheHardwareAddr(ifaceName, gatewayIP)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			return mac, nil
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return nil, errors.New("gateway MAC not found in ARP cache")
 }
 
 func interfaceIPv4Addr(iface *net.Interface) (netip.Addr, error) {
@@ -491,70 +550,7 @@ func defaultGatewayIPv4(ifaceName string) (netip.Addr, error) {
 	}
 	defer f.Close()
 
-	sc := bufio.NewScanner(f)
-	first := true
-	for sc.Scan() {
-		if first {
-			first = false
-			continue
-		}
-		fields := strings.Fields(sc.Text())
-		if len(fields) < 4 || fields[0] != ifaceName || fields[1] != "00000000" {
-			continue
-		}
-		flags, err := strconv.ParseUint(fields[3], 16, 32)
-		if err != nil || flags&0x1 == 0 {
-			continue
-		}
-		gateway, err := routeHexIPv4(fields[2])
-		if err != nil {
-			continue
-		}
-		return gateway, nil
-	}
-	if err := sc.Err(); err != nil {
-		return netip.Addr{}, err
-	}
-	return netip.Addr{}, errors.New("default route not found")
-}
-
-func routeHexIPv4(raw string) (netip.Addr, error) {
-	value, err := strconv.ParseUint(raw, 16, 32)
-	if err != nil {
-		return netip.Addr{}, err
-	}
-	var b [4]byte
-	binary.LittleEndian.PutUint32(b[:], uint32(value))
-	return netip.AddrFrom4(b), nil
-}
-
-func gatewayHardwareAddr(
-	ifaceName string,
-	srcIP, gatewayIP netip.Addr,
-) (net.HardwareAddr, error) {
-	mac, ok, err := arpCacheHardwareAddr(ifaceName, gatewayIP)
-	if err != nil {
-		return nil, err
-	}
-	if ok {
-		return mac, nil
-	}
-	if err := warmARPEntry(srcIP, gatewayIP); err != nil {
-		return nil, err
-	}
-
-	deadline := time.Now().Add(500 * time.Millisecond)
-	for time.Now().Before(deadline) {
-		mac, ok, err = arpCacheHardwareAddr(ifaceName, gatewayIP)
-		if err != nil {
-			return nil, err
-		}
-		if ok {
-			return mac, nil
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	return nil, errors.New("gateway MAC not found in ARP cache")
+	return defaultGatewayIPv4From(f, ifaceName)
 }
 
 func arpCacheHardwareAddr(
