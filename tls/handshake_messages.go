@@ -292,43 +292,6 @@ func (m *clientHelloMsg) marshal() []byte {
 	return m.raw
 }
 
-func (m *clientHelloMsg) marshalWithoutBinders() []byte {
-	bindersLen := 2
-	for _, binder := range m.pskBinders {
-		bindersLen += 1
-		bindersLen += len(binder)
-	}
-
-	fullMessage := m.marshal()
-	return fullMessage[:len(fullMessage)-bindersLen]
-}
-
-func (m *clientHelloMsg) updateBinders(pskBinders [][]byte) {
-	if len(pskBinders) != len(m.pskBinders) {
-		panic("tls: internal error: pskBinders length mismatch")
-	}
-	for i := range m.pskBinders {
-		if len(pskBinders[i]) != len(m.pskBinders[i]) {
-			panic("tls: internal error: pskBinders length mismatch")
-		}
-	}
-	m.pskBinders = pskBinders
-	if m.raw != nil {
-		lenWithoutBinders := len(m.marshalWithoutBinders())
-		b := cryptobyte.NewBuilder(m.raw[:lenWithoutBinders])
-		b.AddUint16LengthPrefixed(func(b *cryptobyte.Builder) {
-			for _, binder := range m.pskBinders {
-				b.AddUint8LengthPrefixed(func(b *cryptobyte.Builder) {
-					b.AddBytes(binder)
-				})
-			}
-		})
-		if len(b.BytesOrPanic()) != len(m.raw) {
-			panic("tls: internal error: failed to update binders")
-		}
-	}
-}
-
 func (m *clientHelloMsg) unmarshal(data []byte) bool {
 	*m = clientHelloMsg{raw: data}
 	s := cryptobyte.String(data)
@@ -661,24 +624,12 @@ func (m *serverHelloMsg) marshal() []byte {
 					})
 				})
 			}
-			if m.selectedIdentityPresent {
-				b.AddUint16(extensionPreSharedKey)
-				b.AddUint16LengthPrefixed(func(b *cryptobyte.Builder) {
-					b.AddUint16(m.selectedIdentity)
-				})
-			}
 			if len(m.cookie) > 0 {
 				b.AddUint16(extensionCookie)
 				b.AddUint16LengthPrefixed(func(b *cryptobyte.Builder) {
 					b.AddUint16LengthPrefixed(func(b *cryptobyte.Builder) {
 						b.AddBytes(m.cookie)
 					})
-				})
-			}
-			if m.selectedGroup != 0 {
-				b.AddUint16(extensionKeyShare)
-				b.AddUint16LengthPrefixed(func(b *cryptobyte.Builder) {
-					b.AddUint16(uint16(m.selectedGroup))
 				})
 			}
 			if len(m.supportedPoints) > 0 {

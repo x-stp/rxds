@@ -16,7 +16,6 @@ import (
 	"fmt"
 	"hash"
 	"sync/atomic"
-	"time"
 )
 
 type clientHandshakeStateTLS13 struct {
@@ -25,12 +24,7 @@ type clientHandshakeStateTLS13 struct {
 	hello       *clientHelloMsg
 	ecdheParams ecdheParameters
 
-	session     *ClientSessionState
-	earlySecret []byte
-	binderKey   []byte
-
 	certReq       *certificateRequestMsgTLS13
-	usingPSK      bool
 	sentDummyCCS  bool
 	suite         *cipherSuiteTLS13
 	transcript    hash.Hash
@@ -216,28 +210,6 @@ func (hs *clientHandshakeStateTLS13) processHelloRetryRequest() error {
 	}
 
 	hs.hello.raw = nil
-	if len(hs.hello.pskIdentities) > 0 {
-		pskSuite := cipherSuiteTLS13ByID(hs.session.cipherSuite)
-		if pskSuite == nil {
-			return c.sendAlert(AlertInternalError)
-		}
-		if pskSuite.hash == hs.suite.hash {
-			ticketAge := uint32(c.config.time().Sub(hs.session.receivedAt) / time.Millisecond)
-			hs.hello.pskIdentities[0].obfuscatedTicketAge = ticketAge + hs.session.ageAdd
-
-			transcript := hs.suite.hash.New()
-			transcript.Write([]byte{typeMessageHash, 0, 0, uint8(len(chHash))})
-			transcript.Write(chHash)
-			transcript.Write(hs.serverHello.marshal())
-			transcript.Write(hs.hello.marshalWithoutBinders())
-			pskBinders := [][]byte{hs.suite.finishedHash(hs.binderKey, transcript)}
-			hs.hello.updateBinders(pskBinders)
-		} else {
-			hs.hello.pskIdentities = nil
-			hs.hello.pskBinders = nil
-		}
-	}
-
 	hs.transcript.Write(hs.hello.marshal())
 	if _, err := c.writeRecord(recordTypeHandshake, hs.hello.marshal()); err != nil {
 		return err
@@ -293,30 +265,8 @@ func (hs *clientHandshakeStateTLS13) processServerHello() error {
 		return nil
 	}
 
-	if int(hs.serverHello.selectedIdentity) >= len(hs.hello.pskIdentities) {
-		c.sendAlert(AlertIllegalParameter)
-		return errors.New("tls: server selected an invalid PSK")
-	}
-
-	if len(hs.hello.pskIdentities) != 1 || hs.session == nil {
-		return c.sendAlert(AlertInternalError)
-	}
-	pskSuite := cipherSuiteTLS13ByID(hs.session.cipherSuite)
-	if pskSuite == nil {
-		return c.sendAlert(AlertInternalError)
-	}
-	if pskSuite.hash != hs.suite.hash {
-		c.sendAlert(AlertIllegalParameter)
-		return errors.New("tls: server selected an invalid PSK and cipher suite pair")
-	}
-
-	hs.usingPSK = true
-	c.didResume = true
-	c.peerCertificates = hs.session.serverCertificates
-	c.verifiedChains = hs.session.verifiedChains
-	c.ocspResponse = hs.session.ocspResponse
-	c.scts = hs.session.scts
-	return nil
+	c.sendAlert(AlertIllegalParameter)
+	return errors.New("tls: server selected an unsolicited PSK")
 }
 
 func (hs *clientHandshakeStateTLS13) establishHandshakeKeys() error {
@@ -328,10 +278,7 @@ func (hs *clientHandshakeStateTLS13) establishHandshakeKeys() error {
 		return errors.New("tls: invalid server key share")
 	}
 
-	earlySecret := hs.earlySecret
-	if !hs.usingPSK {
-		earlySecret = hs.suite.extract(nil, nil)
-	}
+	earlySecret := hs.suite.extract(nil, nil)
 	handshakeSecret := hs.suite.extract(sharedKey,
 		hs.suite.deriveSecret(earlySecret, "derived", nil))
 
@@ -391,16 +338,6 @@ func (hs *clientHandshakeStateTLS13) readServerParameters() error {
 
 func (hs *clientHandshakeStateTLS13) readServerCertificate() error {
 	c := hs.c
-
-	if hs.usingPSK {
-		if c.config.VerifyConnection != nil {
-			if err := c.config.VerifyConnection(c.connectionStateLocked()); err != nil {
-				c.sendAlert(AlertBadCertificate)
-				return err
-			}
-		}
-		return nil
-	}
 
 	msg, err := c.readHandshake()
 	if err != nil {
@@ -592,56 +529,6 @@ func (hs *clientHandshakeStateTLS13) sendClientFinished() error {
 	}
 
 	c.out.setTrafficSecret(hs.suite, hs.trafficSecret)
-
-	if !c.config.SessionTicketsDisabled && c.config.ClientSessionCache != nil {
-		c.resumptionSecret = hs.suite.deriveSecret(hs.masterSecret,
-			resumptionLabel, hs.transcript)
-	}
-
-	return nil
-}
-
-func (c *Conn) handleNewSessionTicket(msg *newSessionTicketMsgTLS13) error {
-	if !c.isClient {
-		c.sendAlert(AlertUnexpectedMessage)
-		return errors.New("tls: received new session ticket from a client")
-	}
-
-	if c.config.SessionTicketsDisabled || c.config.ClientSessionCache == nil {
-		return nil
-	}
-
-	if msg.lifetime == 0 {
-		return nil
-	}
-	lifetime := time.Duration(msg.lifetime) * time.Second
-	if lifetime > maxSessionTicketLifetime {
-		c.sendAlert(AlertIllegalParameter)
-		return errors.New("tls: received a session ticket with invalid lifetime")
-	}
-
-	cipherSuite := cipherSuiteTLS13ByID(c.cipherSuite)
-	if cipherSuite == nil || c.resumptionSecret == nil {
-		return c.sendAlert(AlertInternalError)
-	}
-
-	session := &ClientSessionState{
-		sessionTicket:      msg.label,
-		vers:               c.vers,
-		cipherSuite:        c.cipherSuite,
-		masterSecret:       c.resumptionSecret,
-		serverCertificates: c.peerCertificates,
-		verifiedChains:     c.verifiedChains,
-		receivedAt:         c.config.time(),
-		nonce:              msg.nonce,
-		useBy:              c.config.time().Add(lifetime),
-		ageAdd:             msg.ageAdd,
-		ocspResponse:       c.ocspResponse,
-		scts:               c.scts,
-	}
-
-	cacheKey := clientSessionCacheKey(c.conn.RemoteAddr(), c.config)
-	c.config.ClientSessionCache.Put(cacheKey, session)
 
 	return nil
 }
