@@ -57,10 +57,17 @@ func sendProbe(ctx context.Context, addr string, probe []byte, timeout time.Dura
 		return "", err
 	}
 
+	return readProbeResponse(conn)
+}
+
+func readProbeResponse(conn net.Conn) (string, error) {
 	buf := make([]byte, jarmReadSize)
 	n, err := conn.Read(buf)
-	if n == 0 && err != nil {
-		return "", err
+	if n == 0 {
+		if err != nil {
+			return "", err
+		}
+		return rawEmpty, nil
 	}
 	buf = buf[:n]
 
@@ -97,27 +104,27 @@ func parseServerHello(data []byte) string {
 
 	// Reference: counter+47 is the start of extensions length
 	if counter+42 >= serverHelloLen {
-		return selectedCipher + "|" + serverVersion + "|"
+		return selectedCipher + "|" + serverVersion + "||"
 	}
 
 	// Reference edge-case guards from extract_extension_info
 	if len(data) > counter+47 && data[counter+47] == 11 {
-		return selectedCipher + "|" + serverVersion + "|"
+		return selectedCipher + "|" + serverVersion + "||"
 	}
 	if len(data) > counter+52 {
 		if data[counter+50] == 0x0e && data[counter+51] == 0xac && data[counter+52] == 0x0b {
-			return selectedCipher + "|" + serverVersion + "|"
+			return selectedCipher + "|" + serverVersion + "||"
 		}
 	}
 	if len(data) > 84 {
 		if data[82] == 0x0f && data[83] == 0xf0 && data[84] == 0x0b {
-			return selectedCipher + "|" + serverVersion + "|"
+			return selectedCipher + "|" + serverVersion + "||"
 		}
 	}
 
 	extLenOffset := counter + 47
 	if len(data) < extLenOffset+2 {
-		return selectedCipher + "|" + serverVersion + "|"
+		return selectedCipher + "|" + serverVersion + "||"
 	}
 	extTotalLen := int(data[extLenOffset])<<8 | int(data[extLenOffset+1])
 
@@ -221,7 +228,7 @@ func cipherBytes(h string) string {
 			return fmt.Sprintf("%02x", i+1)
 		}
 	}
-	return "00"
+	return fmt.Sprintf("%02x", len(canonicalCipherList)+1)
 }
 
 func versionByte(ver string) byte {
