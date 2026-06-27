@@ -12,7 +12,6 @@ import (
 	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
-	"crypto/sha512"
 	"errors"
 	"fmt"
 	"io"
@@ -426,7 +425,6 @@ type Config struct {
 	CipherSuites                  []uint16
 	PreferServerCipherSuites      bool
 	SessionTicketsDisabled        bool
-	SessionTicketKey              [32]byte
 	ClientSessionCache            ClientSessionCache
 	MinVersion                    uint16
 	MaxVersion                    uint16
@@ -454,10 +452,7 @@ type Config struct {
 	KeyLogWriter                  io.Writer
 	SSLv2ClientHello              bool
 
-	mutex                 sync.RWMutex
-	sessionTicketKeys     []ticketKey
-	autoSessionTicketKeys []ticketKey
-
+	mutex      sync.RWMutex
 	helloCache *helloTemplateCache
 }
 
@@ -475,30 +470,6 @@ type helloTemplateCache struct {
 	err      error
 }
 
-const (
-	ticketKeyNameLen  = 16
-	ticketKeyLifetime = 7 * 24 * time.Hour
-	ticketKeyRotation = 24 * time.Hour
-)
-
-type ticketKey struct {
-	keyName [ticketKeyNameLen]byte
-	aesKey  [16]byte
-	hmacKey [16]byte
-	created time.Time
-}
-
-func (c *Config) ticketKeyFromBytes(b [32]byte) (key ticketKey) {
-	hashed := sha512.Sum512(b[:])
-	copy(key.keyName[:], hashed[:ticketKeyNameLen])
-	copy(key.aesKey[:], hashed[ticketKeyNameLen:ticketKeyNameLen+16])
-	copy(key.hmacKey[:], hashed[ticketKeyNameLen+16:ticketKeyNameLen+32])
-	key.created = c.time()
-	return key
-}
-
-const maxSessionTicketLifetime = 7 * 24 * time.Hour
-
 func (c *Config) Clone() *Config {
 	if c == nil {
 		return nil
@@ -506,15 +477,6 @@ func (c *Config) Clone() *Config {
 	c.mutex.RLock()
 	defer c.mutex.RUnlock()
 
-	// Deep-copy internal mutable slices to avoid aliasing between clones.
-	var stk []ticketKey
-	if len(c.sessionTicketKeys) > 0 {
-		stk = append([]ticketKey(nil), c.sessionTicketKeys...)
-	}
-	var astk []ticketKey
-	if len(c.autoSessionTicketKeys) > 0 {
-		astk = append([]ticketKey(nil), c.autoSessionTicketKeys...)
-	}
 	return &Config{
 		Rand:                          c.Rand,
 		Time:                          c.Time,
@@ -534,7 +496,6 @@ func (c *Config) Clone() *Config {
 		CipherSuites:                  c.CipherSuites,
 		PreferServerCipherSuites:      c.PreferServerCipherSuites,
 		SessionTicketsDisabled:        c.SessionTicketsDisabled,
-		SessionTicketKey:              c.SessionTicketKey,
 		ClientSessionCache:            c.ClientSessionCache,
 		MinVersion:                    c.MinVersion,
 		MaxVersion:                    c.MaxVersion,
@@ -556,8 +517,6 @@ func (c *Config) Clone() *Config {
 		ExternalClientHello:           c.ExternalClientHello,
 		CertsOnly:                     c.CertsOnly,
 		DontBufferHandshakes:          c.DontBufferHandshakes,
-		sessionTicketKeys:             stk,
-		autoSessionTicketKeys:         astk,
 		SupportedPoints:               c.SupportedPoints,
 		NoOcspStapling:                c.NoOcspStapling,
 		CompressionMethods:            c.CompressionMethods,
@@ -566,8 +525,6 @@ func (c *Config) Clone() *Config {
 		helloCache:                    c.helloCache,
 	}
 }
-
-var deprecatedSessionTicketKey = []byte("DEPRECATED")
 
 func (c *Config) rand() io.Reader {
 	r := c.Rand

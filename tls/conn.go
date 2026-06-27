@@ -47,10 +47,7 @@ type Conn struct {
 	serverName          string
 	secureRenegotiation bool
 	ekm                 func(label string, context []byte, length int) ([]byte, error)
-	resumptionSecret    []byte
 	handshakeLog        *HandshakeLog
-
-	ticketKeys []ticketKey
 
 	clientFinishedIsFirst bool
 
@@ -111,9 +108,7 @@ func putConn(c *Conn) {
 	c.serverName = ""
 	c.secureRenegotiation = false
 	c.ekm = nil
-	c.resumptionSecret = nil
 	c.handshakeLog = nil
-	c.ticketKeys = nil
 	c.clientFinishedIsFirst = false
 	c.closeNotifyErr = nil
 	c.closeNotifySent = false

@@ -192,7 +192,6 @@ func (c *Conn) clientHandshake() (err error) {
 	var ecdheParams ecdheParameters
 	var session *ClientSessionState
 	var cacheKey string
-	var earlySecret, binderKey []byte
 
 	c.didResume = false
 
@@ -221,7 +220,7 @@ func (c *Conn) clientHandshake() (err error) {
 	}
 	c.serverName = hello.serverName
 
-	cacheKey, session, earlySecret, binderKey = c.loadSession(hello)
+	cacheKey, session = c.loadSession(hello)
 	if cacheKey != "" && session != nil {
 		defer func() {
 			if err != nil {
@@ -264,13 +263,7 @@ func (c *Conn) clientHandshake() (err error) {
 	}
 
 	if c.config.CertsOnly {
-		c.handshakeLog = &HandshakeLog{
-			ClientHelloRaw: hello.marshal(),
-			ServerHelloRaw: serverHello.marshal(),
-			ServerVersion:  c.vers,
-			ServerRandom:   serverHello.random,
-			ServerCipher:   serverHello.cipherSuite,
-		}
+		c.handshakeLog = newHandshakeLog(hello, serverHello, c.vers)
 	}
 
 	// Downgrade canary checks. RFC 8446 Section 4.1.3.
@@ -289,11 +282,7 @@ func (c *Conn) clientHandshake() (err error) {
 			serverHello: serverHello,
 			hello:       hello,
 			ecdheParams: ecdheParams,
-			session:     session,
-			earlySecret: earlySecret,
-			binderKey:   binderKey,
 		}
-		// In TLS 1.3, session tickets are delivered after the handshake.
 		return hs13.handshake()
 	}
 
@@ -315,21 +304,21 @@ func (c *Conn) clientHandshake() (err error) {
 	return nil
 }
 
-func (c *Conn) loadSession(hello *clientHelloMsg) (string, *ClientSessionState, []byte, []byte) {
+func (c *Conn) loadSession(hello *clientHelloMsg) (string, *ClientSessionState) {
 	if c.config.SessionTicketsDisabled || c.config.ClientSessionCache == nil {
-		return "", nil, nil, nil
+		return "", nil
 	}
 
 	hello.ticketSupported = true
 
 	if c.handshakes != 0 {
-		return "", nil, nil, nil
+		return "", nil
 	}
 
 	cacheKey := clientSessionCacheKey(c.conn.RemoteAddr(), c.config)
 	session, ok := c.config.ClientSessionCache.Get(cacheKey)
 	if !ok || session == nil {
-		return cacheKey, nil, nil, nil
+		return cacheKey, nil
 	}
 
 	versOk := false
@@ -340,33 +329,43 @@ func (c *Conn) loadSession(hello *clientHelloMsg) (string, *ClientSessionState, 
 		}
 	}
 	if !versOk {
-		return cacheKey, nil, nil, nil
+		return cacheKey, nil
 	}
 
 	if !c.config.InsecureSkipVerify {
 		if len(session.verifiedChains) == 0 {
-			return cacheKey, nil, nil, nil
+			return cacheKey, nil
 		}
 		serverCert := session.serverCertificates[0]
 		if c.config.time().After(serverCert.NotAfter) {
 			c.config.ClientSessionCache.Put(cacheKey, nil)
-			return cacheKey, nil, nil, nil
+			return cacheKey, nil
 		}
 		if err := serverCert.VerifyHostname(c.config.ServerName); err != nil {
-			return cacheKey, nil, nil, nil
+			return cacheKey, nil
 		}
 	}
 
 	if session.vers != VersionTLS13 {
 		if mutualCipherSuite(hello.cipherSuites, session.cipherSuite) == nil {
-			return cacheKey, nil, nil, nil
+			return cacheKey, nil
 		}
 
 		hello.sessionTicket = session.sessionTicket
-		return cacheKey, session, nil, nil
+		return cacheKey, session
 	}
 
-	return cacheKey, session, nil, nil
+	return cacheKey, nil
+}
+
+func newHandshakeLog(hello *clientHelloMsg, serverHello *serverHelloMsg, version uint16) *HandshakeLog {
+	return &HandshakeLog{
+		ClientHelloRaw: append([]byte(nil), hello.marshal()...),
+		ServerHelloRaw: append([]byte(nil), serverHello.marshal()...),
+		ServerVersion:  version,
+		ServerRandom:   append([]byte(nil), serverHello.random...),
+		ServerCipher:   serverHello.cipherSuite,
+	}
 }
 
 func (c *Conn) pickTLSVersion(serverHello *serverHelloMsg) error {

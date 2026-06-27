@@ -18,6 +18,14 @@ var errUnsupported = errors.New("syn scanner requires Linux")
 // Scanner is unavailable on non-Linux platforms.
 type Scanner struct{}
 
+// RouteOverrides are accepted for API parity with Linux.
+type RouteOverrides struct {
+	SrcIP      netip.Addr
+	SrcMAC     net.HardwareAddr
+	GatewayIP  netip.Addr
+	GatewayMAC net.HardwareAddr
+}
+
 // New reports that the SYN scanner is unsupported on this platform.
 func New(
 	iface string,
@@ -36,6 +44,17 @@ func NewForInterface(
 	port uint16,
 	rate int,
 	grace time.Duration,
+) (*Scanner, error) {
+	return nil, errUnsupported
+}
+
+// NewForInterfaceWithOverrides is unsupported on non-Linux platforms.
+func NewForInterfaceWithOverrides(
+	ifaceName string,
+	port uint16,
+	rate int,
+	grace time.Duration,
+	overrides RouteOverrides,
 ) (*Scanner, error) {
 	return nil, errUnsupported
 }

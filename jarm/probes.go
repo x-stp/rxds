@@ -38,6 +38,7 @@ type probeSpec struct {
 	recordVersion uint16
 	helloVersion  uint16
 	order         cipherOrder
+	extOrder      cipherOrder
 	grease        bool
 	alpn          alpnMode
 	versions      versionMode
@@ -46,16 +47,16 @@ type probeSpec struct {
 
 // probeSpecs matches the queue array from reference jarm.py(salesforce, main().)
 var probeSpecs = [probeCount]probeSpec{
-	{0x0303, 0x0303, orderForward, false, alpnStandard, ver12Support, false},  // tls1_2_forward
-	{0x0303, 0x0303, orderReverse, false, alpnStandard, ver12Support, false},  // tls1_2_reverse
-	{0x0303, 0x0303, orderTopHalf, false, alpnStandard, verNone, false},       // tls1_2_top_half
-	{0x0303, 0x0303, orderBottomHalf, false, alpnRare, verNone, false},        // tls1_2_bottom_half
-	{0x0303, 0x0303, orderMiddleOut, true, alpnRare, verNone, false},          // tls1_2_middle_out
-	{0x0302, 0x0302, orderForward, false, alpnStandard, verNone, false},       // tls1_1_middle_out (actually TLS 1.1 forward)
-	{0x0301, 0x0303, orderForward, false, alpnStandard, ver13Support, false},  // tls1_3_forward
-	{0x0301, 0x0303, orderReverse, false, alpnStandard, ver13Support, false},  // tls1_3_reverse
-	{0x0301, 0x0303, orderForward, false, alpnStandard, ver13Support, true},   // tls1_3_invalid
-	{0x0301, 0x0303, orderMiddleOut, true, alpnStandard, ver13Support, false}, // tls1_3_middle_out
+	{0x0303, 0x0303, orderForward, orderReverse, false, alpnStandard, ver12Support, false},  // tls1_2_forward
+	{0x0303, 0x0303, orderReverse, orderForward, false, alpnStandard, ver12Support, false},  // tls1_2_reverse
+	{0x0303, 0x0303, orderTopHalf, orderForward, false, alpnStandard, verNone, false},       // tls1_2_top_half
+	{0x0303, 0x0303, orderBottomHalf, orderForward, false, alpnRare, verNone, false},        // tls1_2_bottom_half
+	{0x0303, 0x0303, orderMiddleOut, orderReverse, true, alpnRare, verNone, false},          // tls1_2_middle_out
+	{0x0302, 0x0302, orderForward, orderForward, false, alpnStandard, verNone, false},       // tls1_1_middle_out
+	{0x0301, 0x0303, orderForward, orderReverse, false, alpnStandard, ver13Support, false},  // tls1_3_forward
+	{0x0301, 0x0303, orderReverse, orderForward, false, alpnStandard, ver13Support, false},  // tls1_3_reverse
+	{0x0301, 0x0303, orderForward, orderForward, false, alpnStandard, ver13Support, true},   // tls1_3_invalid
+	{0x0301, 0x0303, orderMiddleOut, orderReverse, true, alpnStandard, ver13Support, false}, // tls1_3_middle_out
 }
 
 // Probes returns the 10 raw ClientHello packets for the given hostname.
@@ -84,6 +85,21 @@ var tls13Ciphers = map[uint16]bool{
 	0x1301: true, 0x1302: true, 0x1303: true, 0x1304: true, 0x1305: true,
 }
 
+var greaseValues = [...]uint16{
+	0x0a0a, 0x1a1a, 0x2a2a, 0x3a3a,
+	0x4a4a, 0x5a5a, 0x6a6a, 0x7a7a,
+	0x8a8a, 0x9a9a, 0xaaaa, 0xbaba,
+	0xcaca, 0xdada, 0xeaea, 0xfafa,
+}
+
+func chooseGrease() uint16 {
+	var b [1]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return greaseValues[0]
+	}
+	return greaseValues[int(b[0])%len(greaseValues)]
+}
+
 func reorderCiphers(ciphers []uint16, order cipherOrder) []uint16 {
 	out := make([]uint16, len(ciphers))
 	copy(out, ciphers)
@@ -94,28 +110,32 @@ func reorderCiphers(ciphers []uint16, order cipherOrder) []uint16 {
 		}
 	case orderTopHalf:
 		mid := len(out) / 2
-		top := make([]uint16, len(out)-mid)
-		copy(top, out[mid:])
-		for i, j := 0, len(top)-1; i < j; i, j = i+1, j-1 {
-			top[i], top[j] = top[j], top[i]
-		}
 		result := make([]uint16, 0, len(out))
-		result = append(result, out[mid])
-		result = append(result, top...)
+		if len(out)%2 == 1 {
+			result = append(result, out[mid])
+		}
+		for i := mid - 1; i >= 0; i-- {
+			result = append(result, out[i])
+		}
 		out = result
 	case orderBottomHalf:
 		mid := len(out) / 2
-		out = out[mid:]
+		if len(out)%2 == 1 {
+			out = out[mid+1:]
+		} else {
+			out = out[mid:]
+		}
 	case orderMiddleOut:
 		result := make([]uint16, 0, len(out))
 		mid := len(out) / 2
-		result = append(result, out[mid])
-		for i := 1; i <= mid; i++ {
-			if mid+i < len(out) {
-				result = append(result, out[mid+i])
+		if len(out)%2 == 1 {
+			result = append(result, out[mid])
+			for i := 1; i <= mid; i++ {
+				result = append(result, out[mid+i], out[mid-i])
 			}
-			if mid-i >= 0 {
-				result = append(result, out[mid-i])
+		} else {
+			for i := 1; i <= mid; i++ {
+				result = append(result, out[mid-1+i], out[mid-i])
 			}
 		}
 		out = result
@@ -140,16 +160,14 @@ func buildProbe(spec probeSpec, host string) []byte {
 
 	var greaseVal uint16
 	if spec.grease {
-		var g [2]byte
-		rand.Read(g[:])
-		greaseVal = (uint16(g[0]&0x0f) << 8) | 0x0a0a
+		greaseVal = chooseGrease()
 		ciphers = append([]uint16{greaseVal}, ciphers...)
 	}
 
 	// Build extensions
 	var exts []byte
 	if spec.grease {
-		exts = appendExtension(exts, greaseVal, nil)
+		exts = appendExtension(exts, chooseGrease(), nil)
 	}
 	exts = appendSNI(exts, host)
 	exts = appendExtension(exts, 0x0017, nil) // extended master secret
@@ -158,15 +176,12 @@ func buildProbe(spec probeSpec, host string) []byte {
 
 	// Supported groups: x25519, P-256, P-384, P-521
 	groups := []uint16{0x001d, 0x0017, 0x0018, 0x0019}
-	if spec.grease {
-		groups = append([]uint16{greaseVal}, groups...)
-	}
 	exts = appendSupportedGroups(exts, groups)
 	exts = appendExtension(exts, 0x000b, []byte{0x01, 0x00}) // EC point formats
 	exts = appendExtension(exts, 0x0023, nil)                // session ticket
 
 	if spec.alpn != alpnNone {
-		exts = appendALPN(exts, spec.alpn)
+		exts = appendALPN(exts, spec.alpn, spec.extOrder)
 	}
 
 	// Signature algorithms
@@ -184,7 +199,7 @@ func buildProbe(spec probeSpec, host string) []byte {
 	ks = appendUint16(ks, uint16(len(ksPub)))
 	ks = append(ks, ksPub...)
 	if spec.grease {
-		gks := appendUint16(nil, greaseVal)
+		gks := appendUint16(nil, chooseGrease())
 		gks = appendUint16(gks, 1)
 		gks = append(gks, 0x00)
 		ks = append(gks, ks...)
@@ -196,7 +211,7 @@ func buildProbe(spec probeSpec, host string) []byte {
 	exts = appendExtension(exts, 0x002d, []byte{0x01, 0x01}) // PSK key exchange modes
 
 	if spec.versions != verNone {
-		exts = appendSupportedVersions(exts, spec.versions, spec.grease, greaseVal)
+		exts = appendSupportedVersions(exts, spec.versions, spec.extOrder, spec.grease)
 	}
 
 	// ClientHello body
@@ -250,7 +265,7 @@ func appendSupportedGroups(exts []byte, groups []uint16) []byte {
 	return appendExtension(exts, 0x000a, data)
 }
 
-func appendALPN(exts []byte, mode alpnMode) []byte {
+func appendALPN(exts []byte, mode alpnMode, order cipherOrder) []byte {
 	var protocols []string
 	switch mode {
 	case alpnStandard:
@@ -258,6 +273,8 @@ func appendALPN(exts []byte, mode alpnMode) []byte {
 	case alpnRare:
 		protocols = []string{"http/0.9", "http/1.0", "spdy/1", "spdy/2", "spdy/3", "h2c", "hq"}
 	}
+	protocols = reorderStrings(protocols, order)
+
 	var list []byte
 	for _, p := range protocols {
 		list = append(list, byte(len(p)))
@@ -276,22 +293,35 @@ func appendSigAlgs(exts []byte, algs []uint16) []byte {
 	return appendExtension(exts, 0x000d, data)
 }
 
-func appendSupportedVersions(exts []byte, mode versionMode, grease bool, greaseVal uint16) []byte {
+func appendSupportedVersions(exts []byte, mode versionMode, order cipherOrder, grease bool) []byte {
 	var versions []uint16
 	if grease {
-		versions = append(versions, greaseVal)
+		versions = append(versions, chooseGrease())
 	}
 	switch mode {
 	case ver12Support:
-		versions = append(versions, 0x0303, 0x0302, 0x0301)
+		versions = append(versions, reorderCiphers([]uint16{0x0301, 0x0302, 0x0303}, order)...)
 	case ver13Support:
-		versions = append(versions, 0x0304, 0x0303, 0x0302, 0x0301)
+		versions = append(versions, reorderCiphers([]uint16{0x0301, 0x0302, 0x0303, 0x0304}, order)...)
 	}
 	data := []byte{byte(len(versions) * 2)}
 	for _, v := range versions {
 		data = appendUint16(data, v)
 	}
 	return appendExtension(exts, 0x002b, data)
+}
+
+func reorderStrings(values []string, order cipherOrder) []string {
+	ids := make([]uint16, len(values))
+	for i := range values {
+		ids[i] = uint16(i)
+	}
+	reordered := reorderCiphers(ids, order)
+	out := make([]string, len(reordered))
+	for i, id := range reordered {
+		out[i] = values[id]
+	}
+	return out
 }
 
 func appendExtension(exts []byte, extType uint16, data []byte) []byte {
