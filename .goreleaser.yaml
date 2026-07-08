@@ -14,10 +14,17 @@ builds:
     env:
       - CGO_ENABLED=0
     goos: [windows, linux, darwin, freebsd]
-    goarch: [amd64, arm64]
+    goarch: [amd64, arm64, ppc64le]
     ignore:
       - goos: windows
         goarch: arm64
+      # ppc64le is a linux-only Go target
+      - goos: windows
+        goarch: ppc64le
+      - goos: darwin
+        goarch: ppc64le
+      - goos: freebsd
+        goarch: ppc64le
     flags:
       - -trimpath
     ldflags:
@@ -89,6 +96,17 @@ release:
     Or download the binary for your platform from the assets below.
     
     **docs**: https://github.com/x-stp/rxds#readme
+
+homebrew_casks:
+  - repository:
+      owner: x-stp
+      name: homebrew-rxds
+      token: '{{ .Env.HOMEBREW_TAP_TOKEN }}'
+    name: rxds
+    directory: Casks
+    homepage: 'https://github.com/x-stp/rxds'
+    description: 'rx/dialstreamer — streaming TLS certificate harvester'
+    license: 'MPL-2.0'
 
 nfpms:
   - id: rxds
