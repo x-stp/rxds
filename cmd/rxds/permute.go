@@ -3,8 +3,11 @@
 
 package main
 
+// permuteIndex maps i to a unique idx in [0,size) via cycle-walking a
+// Feistel permutation. size <= 1 as cycle-walking can only stall.
+// we ret that sole valid index upfront rather than waiting for the orbit to hit it =)
 func permuteIndex(i, size, key uint32) uint32 {
-	if size == 0 {
+	if size <= 1 {
 		return 0
 	}
 	x := feistel32(i, key)
