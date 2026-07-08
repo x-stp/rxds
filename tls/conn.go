@@ -24,6 +24,8 @@ import (
 	"time"
 
 	"crypto/x509"
+
+	"github.com/rs/zerolog/log"
 )
 
 type Conn struct {
@@ -1261,7 +1263,14 @@ func (c *Conn) handshake(ctx context.Context) (ret error) {
 	if c.handshakeErr == nil {
 		c.handshakes++
 	} else {
-		c.flush()
+		flush, err := c.flush()
+		if err != nil {
+			log.Debug().
+				Stringer("remote_addr", c.conn.RemoteAddr()).
+				Int("flush_bytes", flush).
+				Err(err).
+				Msg("connection flush failed")
+		}
 	}
 
 	// ErrExpected is a cert-only early stop signal: not a completed handshake,

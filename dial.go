@@ -9,6 +9,8 @@ import (
 	"errors"
 	"net"
 
+	"github.com/rs/zerolog/log"
+
 	"github.com/x-stp/rxds/tls"
 )
 
@@ -25,7 +27,12 @@ func dialForCertConn(
 	if err != nil {
 		return nil, err
 	}
-	defer rawConn.Close()
+	defer func(rawConn net.Conn) {
+		err := rawConn.Close()
+		if err != nil {
+			log.Debug().Err(err).Msg("Failed to close raw connection") // Fatal bit extreme in scan ctx
+		}
+	}(rawConn)
 
 	if deadline, ok := ctx.Deadline(); ok {
 		if err := rawConn.SetDeadline(deadline); err != nil {
