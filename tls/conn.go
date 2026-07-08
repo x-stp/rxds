@@ -1278,7 +1278,7 @@ func (c *Conn) handshake(ctx context.Context) (ret error) {
 	if c.handshakeErr == nil && !c.handshakeComplete() {
 		c.handshakeErr = errors.New("tls: internal error: handshake should have had a result")
 	}
-	if c.handshakeErr == ErrExpected {
+	if errors.Is(c.handshakeErr, ErrExpected) {
 		// Expected early-stop: keep it as the return value but don't treat it as a
 		// missing-handshake-result internal error.
 		return c.handshakeErr
