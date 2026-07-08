@@ -37,9 +37,21 @@ flowchart LR
 
 ## install
 
+Homebrew (macOS/Linux):
+
 ```bash
-go install github.com/x-stp/rxds/cmd/rxds@latest
+brew tap x-stp/rxds
+brew trust --cask x-stp/rxds/rxds   # required once: third-party cask tap
+brew install --cask rxds
 ```
+
+`go install`:
+
+```bash
+go install github.com/x-stp/rxds/cmd/rxds@v1.0.1
+```
+
+Prebuilt binaries and packages (`.deb`/`.rpm`/`.apk`) for linux (amd64, arm64, **ppc64le**), macOS, freebsd, and windows are attached to each [release](https://github.com/x-stp/rxds/releases).
 
 Or build from source:
 
