@@ -29,12 +29,6 @@ type Builder struct {
 	inContinuation *bool
 }
 
-func NewBuilder(buffer []byte) *Builder {
-	return &Builder{
-		result: buffer,
-	}
-}
-
 func NewFixedBuilder(buffer []byte) *Builder {
 	return &Builder{
 		result:    buffer,
