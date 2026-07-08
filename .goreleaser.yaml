@@ -94,8 +94,73 @@ release:
     ```
     
     Or download the binary for your platform from the assets below.
-    
+
+    ### docker
+    ```bash
+    docker pull ghcr.io/x-stp/rxds:{{ .Tag }}
+    ```
+
     **docs**: https://github.com/x-stp/rxds#readme
+
+dockers:
+  - image_templates:
+      - 'ghcr.io/x-stp/{{ .ProjectName }}:{{ .Tag }}-amd64'
+      - 'ghcr.io/x-stp/{{ .ProjectName }}:v{{ .Major }}.{{ .Minor }}-amd64'
+      - 'ghcr.io/x-stp/{{ .ProjectName }}:v{{ .Major }}-amd64'
+      - 'ghcr.io/x-stp/{{ .ProjectName }}:latest-amd64'
+    dockerfile: Dockerfile.goreleaser
+    use: buildx
+    build_flag_templates:
+      - '--pull'
+      - '--platform=linux/amd64'
+      - '--label=org.opencontainers.image.created={{ .Date }}'
+      - '--label=org.opencontainers.image.title={{ .ProjectName }}'
+      - '--label=org.opencontainers.image.revision={{ .FullCommit }}'
+      - '--label=org.opencontainers.image.version={{ .Version }}'
+      - '--label=org.opencontainers.image.source=https://github.com/x-stp/rxds'
+      - '--label=org.opencontainers.image.licenses=MPL-2.0'
+    goarch: amd64
+    goos: linux
+
+  - image_templates:
+      - 'ghcr.io/x-stp/{{ .ProjectName }}:{{ .Tag }}-arm64'
+      - 'ghcr.io/x-stp/{{ .ProjectName }}:v{{ .Major }}.{{ .Minor }}-arm64'
+      - 'ghcr.io/x-stp/{{ .ProjectName }}:v{{ .Major }}-arm64'
+      - 'ghcr.io/x-stp/{{ .ProjectName }}:latest-arm64'
+    dockerfile: Dockerfile.goreleaser
+    use: buildx
+    build_flag_templates:
+      - '--pull'
+      - '--platform=linux/arm64'
+      - '--label=org.opencontainers.image.created={{ .Date }}'
+      - '--label=org.opencontainers.image.title={{ .ProjectName }}'
+      - '--label=org.opencontainers.image.revision={{ .FullCommit }}'
+      - '--label=org.opencontainers.image.version={{ .Version }}'
+      - '--label=org.opencontainers.image.source=https://github.com/x-stp/rxds'
+      - '--label=org.opencontainers.image.licenses=MPL-2.0'
+    goarch: arm64
+    goos: linux
+
+docker_manifests:
+  - name_template: 'ghcr.io/x-stp/{{ .ProjectName }}:{{ .Tag }}'
+    image_templates:
+      - 'ghcr.io/x-stp/{{ .ProjectName }}:{{ .Tag }}-amd64'
+      - 'ghcr.io/x-stp/{{ .ProjectName }}:{{ .Tag }}-arm64'
+
+  - name_template: 'ghcr.io/x-stp/{{ .ProjectName }}:v{{ .Major }}.{{ .Minor }}'
+    image_templates:
+      - 'ghcr.io/x-stp/{{ .ProjectName }}:v{{ .Major }}.{{ .Minor }}-amd64'
+      - 'ghcr.io/x-stp/{{ .ProjectName }}:v{{ .Major }}.{{ .Minor }}-arm64'
+
+  - name_template: 'ghcr.io/x-stp/{{ .ProjectName }}:v{{ .Major }}'
+    image_templates:
+      - 'ghcr.io/x-stp/{{ .ProjectName }}:v{{ .Major }}-amd64'
+      - 'ghcr.io/x-stp/{{ .ProjectName }}:v{{ .Major }}-arm64'
+
+  - name_template: 'ghcr.io/x-stp/{{ .ProjectName }}:latest'
+    image_templates:
+      - 'ghcr.io/x-stp/{{ .ProjectName }}:latest-amd64'
+      - 'ghcr.io/x-stp/{{ .ProjectName }}:latest-arm64'
 
 homebrew_casks:
   - repository:

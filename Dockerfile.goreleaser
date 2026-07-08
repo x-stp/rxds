@@ -1,0 +1,9 @@
+# Dockerfile for GoReleaser — copies the pre-built binary only.
+FROM scratch
+
+# ca-certificates for outbound TLS
+COPY --from=alpine:latest /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+
+COPY rxds /usr/local/bin/rxds
+
+ENTRYPOINT ["/usr/local/bin/rxds"]

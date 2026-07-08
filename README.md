@@ -53,6 +53,12 @@ go install github.com/x-stp/rxds/cmd/rxds@v1.0.1
 
 Prebuilt binaries and packages (`.deb`/`.rpm`/`.apk`) for linux (amd64, arm64, **ppc64le**), macOS, freebsd, and windows are attached to each [release](https://github.com/x-stp/rxds/releases).
 
+Docker (linux amd64/arm64):
+
+```bash
+docker pull ghcr.io/x-stp/rxds:v1.0.2
+```
+
 Or build from source:
 
 ```bash
