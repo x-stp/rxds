@@ -1,6 +1,6 @@
 module github.com/x-stp/rxds
 
-go 1.25.8
+go 1.26.5
 
 require (
 	github.com/google/gopacket v1.1.19
