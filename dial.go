@@ -55,7 +55,7 @@ func DialForCert(ctx context.Context, network, addr string, config *tls.Config) 
 	conf := config
 	if conf.ServerName == "" {
 		conf = config.Clone()
-		conf.InsecureSkipVerify = true
+		conf.InsecureSkipVerify = true // this ain't GRC
 		if host, _, err := net.SplitHostPort(addr); err == nil && host != "" {
 			conf.ServerName = host
 		}
@@ -67,13 +67,10 @@ func DialForCert(ctx context.Context, network, addr string, config *tls.Config) 
 // DialForCertRaw is like DialForCert, but assumes config is already prepared
 // for cert harvesting and owned by the caller.
 func DialForCertRaw(
-	ctx context.Context,
-	dialer *net.Dialer,
-	network, addr string,
-	config *tls.Config,
-) ([]*x509.Certificate, error) {
+	ctx context.Context, dialer *net.Dialer, network, addr string, config *tls.Config) ([]*x509.Certificate, error) {
 	if config == nil {
 		config = &tls.Config{}
 	}
+
 	return dialForCertConn(ctx, dialer, network, addr, config)
 }
