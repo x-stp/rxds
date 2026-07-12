@@ -1,68 +1,77 @@
+version: "2"
 run:
-  timeout: 5m
   tests: true
-
 linters:
   enable:
-    - gosec
-    - staticcheck
     - bodyclose
-    - errcheck
-    - ineffassign
-    - revive
-    - govet
-    - gofmt
-    - goimports
-    - misspell
-    - unconvert
-    - prealloc
     - gocritic
-    - gosimple
+    - gosec
+    - misspell
+    - prealloc
+    - revive
+    - unconvert
   disable:
-    - gomnd
-    - wsl
-    - nlreturn
-    - gochecknoinits
     - gochecknoglobals
-
-linters-settings:
-  gosec:
-    severity: "high"
-    confidence: "medium"
-    excludes:
-      - G104
-      - G304
-  errcheck:
-    check-type-assertions: true
-    check-blank: true
-  gocritic:
-    enabled-tags:
-      - diagnostic
-      - performance
-    disabled-checks:
-      - dupImport
-      - ifElseChain
-      - whyNoLint
-  prealloc:
-    simple: true
-    range-loops: true
-    for-loops: true
-
+    - gochecknoinits
+    - mnd
+    - nlreturn
+    - wsl
+  settings:
+    errcheck:
+      check-type-assertions: true
+      check-blank: true
+    gocritic:
+      disabled-checks:
+        - ifElseChain
+      enabled-tags:
+        - diagnostic
+        - performance
+    gosec:
+      excludes:
+        - G104
+        - G304
+      severity: high
+      confidence: medium
+    prealloc:
+      simple: true
+      range-loops: true
+      for-loops: true
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      - linters:
+          - errcheck
+          - gosec
+        path: _test\.go
+      - linters:
+          - dupl
+          - funlen
+          - gocognit
+          - gocyclo
+        path: tls/
+      - linters:
+          - funlen
+          - gocyclo
+        path: cryptobyte/
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
 issues:
-  exclude-rules:
-    - path: _test\.go
-      linters:
-        - errcheck
-        - gosec
-    - path: tls/
-      linters:
-        - funlen
-        - gocyclo
-        - gocognit
-        - dupl
-    - path: cryptobyte/
-      linters:
-        - funlen
-        - gocyclo
   max-issues-per-linter: 50
   max-same-issues: 3
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
