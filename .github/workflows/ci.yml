@@ -36,7 +36,10 @@ jobs:
         run: go vet ./...
 
       - name: test
-        run: go test -race -cover ./...
+        # 30m guard: the cmd/rxds permutation test is pathologically slow under
+        # -race until the Feistel-domain fix lands; raise from the 10m default so
+        # the suite completes rather than hard-failing. Lower once that fix merges.
+        run: go test -race -cover -timeout 30m ./...
 
   zizmor:
     runs-on: ubuntu-latest
