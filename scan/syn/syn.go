@@ -7,7 +7,6 @@
 package syn
 
 import (
-	"bufio"
 	"context"
 	crand "crypto/rand"
 	"encoding/binary"
@@ -17,8 +16,6 @@ import (
 	"net"
 	"net/netip"
 	"os"
-	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -134,30 +131,7 @@ func DiscoverDefaultIface() (string, error) {
 	}
 	defer f.Close()
 
-	sc := bufio.NewScanner(f)
-	first := true
-	for sc.Scan() {
-		if first {
-			first = false
-			continue
-		}
-		fields := strings.Fields(sc.Text())
-		if len(fields) < 4 || fields[1] != "00000000" {
-			continue
-		}
-		flags, err := strconv.ParseUint(fields[3], 16, 32)
-		if err != nil {
-			continue
-		}
-		if flags&0x1 == 0 || flags&0x2 == 0 {
-			continue
-		}
-		return fields[0], nil
-	}
-	if err := sc.Err(); err != nil {
-		return "", err
-	}
-	return "", errors.New("no default route found in /proc/net/route")
+	return defaultIfaceFrom(f)
 }
 
 func (s *Scanner) cookieISN(dstIP netip.Addr) uint32 {
@@ -563,34 +537,7 @@ func arpCacheHardwareAddr(
 	}
 	defer f.Close()
 
-	sc := bufio.NewScanner(f)
-	first := true
-	target := ip.String()
-	for sc.Scan() {
-		if first {
-			first = false
-			continue
-		}
-		fields := strings.Fields(sc.Text())
-		if len(fields) < 6 || fields[0] != target || fields[5] != ifaceName {
-			continue
-		}
-		// ATF_COM (0x2) means the entry is resolved. Without it the HW addr is
-		// typically 00:00:00:00:00:00 (incomplete/failed NUD state).
-		flags, err := strconv.ParseUint(fields[2], 16, 32)
-		if err != nil || flags&0x2 == 0 {
-			continue
-		}
-		mac, err := net.ParseMAC(fields[3])
-		if err != nil {
-			return nil, false, err
-		}
-		return mac, true, nil
-	}
-	if err := sc.Err(); err != nil {
-		return nil, false, err
-	}
-	return nil, false, nil
+	return arpHardwareAddrFrom(f, ifaceName, ip)
 }
 
 func warmARPEntry(srcIP, gatewayIP netip.Addr) error {
