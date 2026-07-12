@@ -28,9 +28,11 @@ func dialForCertConn(
 		return nil, err
 	}
 	defer func(rawConn net.Conn) {
-		err := rawConn.Close()
-		if err != nil {
-			log.Debug().Err(err).Msg("Failed to close raw connection") // Fatal bit extreme in scan ctx
+		// crypto/tls's own handshake-interrupt goroutine closes the underlying
+		// conn on ctx cancel/timeout (see tls.Conn.HandshakeContext), so a
+		// stalled-handshake target is already closed here. Don't log that race.
+		if err := rawConn.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+			log.Debug().Err(err).Msg("failed to close raw connection")
 		}
 	}(rawConn)
 
